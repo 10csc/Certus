@@ -24,21 +24,17 @@ def extract_intent(user_context):
         return lines[-1][:60] if lines else user_context[:60]
 
     try:
-        from openai import OpenAI
-        config = load_config()
-        client = OpenAI(base_url=config.get("deepseek_api", DEFAULT_API), api_key="local")
-        resp = client.chat.completions.create(
+        from common import call_deepseek_api
+        topic = call_deepseek_api(
+            system_prompt="提取用户问题的核心搜索主题（≤40字）。只输出主题，不要解释。",
+            user_prompt=user_context,
             model="deepseek-v4-pro",
-            messages=[{
-                "role": "system",
-                "content": "提取用户问题的核心搜索主题（≤40字）。只输出主题，不要解释。"
-            }, {"role": "user", "content": user_context}],
-            temperature=0.1, max_tokens=80,
+            max_tokens=80,
+            temperature=0.1,
+            timeout=30,
         )
-        topic = resp.choices[0].message.content.strip()
-        return topic if topic else user_context[:80]
+        return topic.strip() if topic else user_context[:80]
     except Exception:
-        # LLM 不可用：取用户最后一行作为主题
         lines = [l for l in user_context.split("\n") if l.strip()]
         return lines[-1][:80] if lines else user_context[:80]
 
@@ -77,13 +73,15 @@ def build_search_prompt(topic, depth="L2"):
         f"**{core}**\n\n"
         f"---\n"
         f"【可靠性要求】\n"
-        f"1. 每条关键结论必须标注可信度：\n"
-        f"   - 有明确来源支撑 → [已确认: 来源URL或名称]\n"
+        f"1. 每条关键结论必须标注可信度——**必须附带具体URL**（禁止只写名称）：\n"
+        f"   - 有明确来源支撑 → [已确认: https://具体URL]\n"
         f"   - 基于推理但来源不直接 → [推断]\n"
         f"   - 无法找到可靠来源 → [未确认]\n"
         f"2. 至少给出 2 条独立分析路径（独立 = 不同角度/不同信源群）\n"
         f"3. 优先引用官方文档、学术论文、开源仓库，避免自媒体/营销号\n"
-        f"4. 无法确认的结论诚实标注，不要为凑来源而引用低质信源\n\n"
+        f"4. 无法确认的结论诚实标注，不要为凑来源而引用低质信源\n"
+        f"5. **重要**：所有引用来源统一放在回复末尾的「参考来源」段落，格式为：\n"
+        f"   - [标题](URL) —— 便于系统提取和评分\n\n"
         f"{_marker_fence(marker)}"
     )
     return topic, prompt

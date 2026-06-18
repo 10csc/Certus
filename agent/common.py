@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
-"""common utilities —— 配置读取、CDP连接、端口管理、会话路由"""
+"""common utilities —— 配置读取、CDP连接、端口管理、会话路由。
+
+Certus 改造：
+  - load_config() 支持从 C++ hello 握手传入 config_dict，不从文件读
+  - ensure_browser() 支持 launch_policy="external"（C++ 管理浏览器）
+"""
 import json
 import os
+import sys
 import time
 from runtime_paths import (
     CONFIG_PATH as RUNTIME_CONFIG_PATH,
@@ -19,11 +25,35 @@ DEFAULT_CDP_PORT = 9223
 CDP_SCAN_RANGE = (9223, 9226)
 DEFAULT_URL = "https://chat.deepseek.com/"
 
+# 运行时配置（C++ hello 握手传入，优先级高于 config.json）
+_runtime_config = None
+
+
+def set_runtime_config(config_dict):
+    """设置运行时配置（由 C++ hello 握手传入）。
+
+    Python 不再读 config.json，全部配置由 C++ 通过 stdin 传入。
+    agent.py 在 handshake 后调用此函数。
+    """
+    global _runtime_config
+    _runtime_config = config_dict
+
 
 # ====== 配置读取 ======
 
 def load_config():
-    """读取 config.json，兼容 v4/v5/v6 所有版本"""
+    """读取配置。
+
+    Protocol 模式（C++ hello）：完全使用 runtime_config，不触碰 config.json。
+    CLI 模式（无 hello）：直接读 config.json。
+    """
+    if _runtime_config is not None:
+        return dict(_runtime_config)
+    return _read_config_file()
+
+
+def _read_config_file():
+    """从 config.json 读取配置（含默认值填充）。"""
     config_path = CONFIG_PATH
     if not os.path.exists(config_path):
         return _default_config()
@@ -52,10 +82,20 @@ def _default_config():
 
 
 def save_config(config):
-    """Persist config to the runtime-owned config path."""
+    """持久化配置到 config.json。
+
+    过滤掉运行时临时字段（query/depth/mock_cdp 等由 C++ hello 传入的字段），
+    只保存持久化配置项，避免破坏 config.json 中的平台/会话信息。
+    """
+    # 运行时字段（不持久化）
+    runtime_keys = {
+        "query", "depth", "mock_cdp", "data_dir", "mock_file",
+    }
+    persisted = {k: v for k, v in config.items() if k not in runtime_keys}
+
     ensure_runtime_dirs()
     with open(RUNTIME_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+        json.dump(persisted, f, ensure_ascii=False, indent=2)
 
 
 def get_python_venv_path():
@@ -207,10 +247,27 @@ def ensure_browser(p, cdp_port=None, launch_policy="manual", kill_existing=False
     """连接 CDP 浏览器。
 
     launch_policy:
+      - "external": C++ 管理浏览器，直接使用 cdp_port 连接，不扫描/不启动/不杀。
       - "manual": 默认。只连接已有 CDP，不启动/不杀浏览器。
       - "auto": 未检测到 CDP 时尝试启动浏览器。
     返回 (browser, page)。
     """
+    if launch_policy == "external":
+        port = cdp_port or DEFAULT_CDP_PORT
+        cdp_url = "http://127.0.0.1:{0}".format(port)
+        import sys as _sys
+        print("[*] 连接外部浏览器 (CDP: {0})...".format(port), file=_sys.stderr)
+        try:
+            browser = p.chromium.connect_over_cdp(cdp_url, timeout=5000)
+        except Exception as e:
+            raise RuntimeError(
+                "CDP 外部连接失败 (端口 {0})：{1}".format(port, e)
+            )
+        contexts = browser.contexts
+        if not contexts or not contexts[0].pages:
+            raise RuntimeError("无可用的浏览器标签页，请打开至少一个标签页后重试")
+        return browser, contexts[0].pages[-1]
+
     port = find_cdp_port(preferred=cdp_port)
     if not port:
         if launch_policy != "auto":
@@ -273,7 +330,6 @@ def ensure_page(browser, url, new_tab=False):
     page.goto(url, timeout=30000, wait_until="domcontentloaded")
     time.sleep(3)
     return page
-    return page
 
 
 # ====== 提交验证 ======
@@ -298,19 +354,25 @@ def submit_and_verify(plat, page, prompt):
 # ====== 页面文本 ======
 
 def safe_page_text(page):
-    """安全提取页面文本（textContent 优先，不受虚拟滚动影响）"""
-    try:
-        return page.evaluate("document.body.textContent || ''")
-    except Exception:
-        pass
-    try:
-        return page.inner_text("body")
-    except Exception:
-        pass
-    try:
-        return page.evaluate("document.body ? document.body.innerText : ''")
-    except Exception:
-        return ""
+    """安全提取页面文本（textContent 优先，不受虚拟滚动影响）。
+
+    三层 fallback：textContent → inner_text → innerText。
+    全部失败时返回空字符串并打印警告。
+    """
+    for attempt, method in enumerate([
+        ("textContent", lambda: page.evaluate("document.body.textContent || ''")),
+        ("inner_text", lambda: page.inner_text("body")),
+        ("innerText", lambda: page.evaluate("document.body ? document.body.innerText : ''")),
+    ]):
+        name, fn = method
+        try:
+            result = fn()
+            if result and len(str(result).strip()) > 50:
+                return result
+        except Exception:
+            continue
+    print("[警告] safe_page_text: 三种方法均未能提取有效页面文本", file=sys.stderr)
+    return ""
 
 
 # ====== 平台检测 ======
@@ -375,9 +437,14 @@ def get_session_url(project=None, platform=None):
 
 
 def _save_session(project, url):
-    """保存平台链接到 config.json（两级映射）。
-    失败时打印警告但不中断主流程。
+    """保存平台链接。
+
+    Protocol 模式（C++ 管理）：跳过——SQLite 为唯一权威源，且写回会泄漏明文 API key。
+    CLI 模式：写入 config.json。
     """
+    if _runtime_config is not None:
+        # Protocol 模式：会话链接由 C++ 端 ConfigPage 写入 SQLite，Python 不写文件
+        return
     try:
         config = load_config()
     except Exception as e:
@@ -428,3 +495,62 @@ def dismiss_blockers_base(page):
         time.sleep(0.3)
     except Exception:
         pass
+
+
+# ====== DeepSeek API 统一调用 ======
+
+
+# ====== 平台配置读取 ======
+
+
+def get_search_platform():
+    """读取默认搜索平台。"""
+    return load_config().get("search_platform", "deepseek")
+
+
+def get_synthesis_platform():
+    """读取默认整合平台。"""
+    return load_config().get("synthesis_platform", "kimi")
+
+
+def call_deepseek_api(system_prompt, user_prompt, model="deepseek-v4-pro",
+                      max_tokens=4096, temperature=0.3, timeout=120):
+    """统一 DeepSeek API 调用——消除分散在项目中的 6 处重复实现。
+
+    返回响应文本，失败返回 None（同时打印到 stderr）。
+    """
+    import json as _json, ssl, urllib.request
+
+    config = load_config()
+    api_url = config.get("deepseek_api", "https://api.deepseek.com/v1")
+    api_key = config.get("deepseek_key", "")
+    if not api_key:
+        print("[API] deepseek_key 未配置，跳过调用", file=sys.stderr)
+        return None
+
+    payload = _json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }, ensure_ascii=False).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(
+            f"{api_url}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        ctx = ssl.create_default_context()
+        resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        body = _json.loads(resp.read().decode("utf-8"))
+        return body["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"[API] 调用失败 (model={model}): {e}", file=sys.stderr)
+        return None

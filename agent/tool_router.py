@@ -5,7 +5,7 @@
 用 fast 模型做毫秒级分类 → LLM 不可用时降级规则引擎。
 """
 
-import json, ssl, os, sys
+import json, os, sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
@@ -28,49 +28,21 @@ ROUTING_PROMPT = """你是搜索任务路由器。分析用户问题，输出 JS
 问题："""
 
 
-def _get_api_config():
-    """从 config.json 读取 API 配置。"""
-    config_path = os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        return cfg.get("deepseek_api", "https://api.deepseek.com/v1"), \
-               cfg.get("deepseek_key", "")
-    except Exception:
-        return "https://api.deepseek.com/v1", ""
-
-
 def classify_llm(user_query):
     """LLM 语义路由。失败返回 None。"""
-    api_url, api_key = _get_api_config()
-    if not api_key:
-        return None
-
     try:
-        from urllib.request import Request, urlopen
-
-        payload = json.dumps({
-            "model": "deepseek-v4-flash",
-            "messages": [
-                {"role": "system", "content": "你是搜索路由器。输出纯 JSON。"},
-                {"role": "user", "content": ROUTING_PROMPT + user_query},
-            ],
-            "temperature": 0.0,
-            "max_tokens": 150,
-        }, ensure_ascii=False).encode("utf-8")
-
-        req = Request(
-            f"{api_url}/chat/completions",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
+        from common import call_deepseek_api
+        text = call_deepseek_api(
+            system_prompt="你是搜索路由器。输出纯 JSON。",
+            user_prompt=ROUTING_PROMPT + user_query,
+            model="deepseek-v4-flash",
+            max_tokens=150,
+            temperature=0.0,
+            timeout=10,
         )
-        ctx = ssl.create_default_context()
-        resp = urlopen(req, timeout=10, context=ctx)
-        body = json.loads(resp.read().decode("utf-8"))
-        text = body["choices"][0]["message"]["content"].strip()
+        if not text:
+            return None
+        text = text.strip()
 
         # 清理 markdown 包裹
         if text.startswith("```"):

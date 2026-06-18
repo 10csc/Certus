@@ -1,0 +1,8 @@
+{
+  "_type": "synthesis_empty",
+  "_description": "整合平台空回复 —— Kimi 上传素材后无输出",
+  "platform": "kimi",
+  "query": "Python 性能优化最佳实践",
+  "detail": "Kimi 收到上传素材后，回复框为空（可能文件解析失败或平台异常），DOM 提取和 textContent 均无有效内容",
+  "error_type": "synthesis_empty"
+}

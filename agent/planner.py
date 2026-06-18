@@ -12,18 +12,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from orchestrator import _get_search_platform, _get_synthesis_platform
-
-
-def _get_llm_config():
-    config_path = os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        return cfg.get("deepseek_api", "https://api.deepseek.com/v1"), \
-               cfg.get("deepseek_key", "")
-    except Exception:
-        return "https://api.deepseek.com/v1", ""
+from common import get_search_platform, get_synthesis_platform
 
 
 DECOMPOSE_PROMPT = """你是研究规划器。将用户问题拆分为 2 个独立研究任务，每个任务都是完整分析（含搜索+推理+结论），不是单纯信息采集。
@@ -48,22 +37,21 @@ L2: FULL:
 def _llm_decompose(user_query, depth="L2"):
     """LLM 分解为采集方向。失败返回 None。"""
     try:
-        from openai import OpenAI
-        api_url, api_key = _get_llm_config()
-        if not api_key:
-            return None
-        client = OpenAI(base_url=api_url, api_key=api_key)
-        resp = client.chat.completions.create(
+        from common import call_deepseek_api
+        user_msg = (f"深度: {depth}\n"
+                     + ("L3: 拆为 2 个互补分析方向\n" if depth == "L3" else "")
+                     + f"问题: {user_query}")
+        text = call_deepseek_api(
+            system_prompt=DECOMPOSE_PROMPT,
+            user_prompt=user_msg,
             model="deepseek-v4-pro",
-            messages=[
-                {"role": "system", "content": DECOMPOSE_PROMPT},
-                {"role": "user", "content": f"深度: {depth}\n"
-                    + ("L3: 拆为 2 个互补分析方向\n" if depth == "L3" else "")
-                    + f"问题: {user_query}"},
-            ],
-            temperature=0.1, max_tokens=500,
+            max_tokens=500,
+            temperature=0.1,
+            timeout=30,
         )
-        text = resp.choices[0].message.content.strip()
+        if not text:
+            return None
+        text = text.strip()
         domains = []
         for line in text.split("\n"):
             line = line.strip()
@@ -85,8 +73,8 @@ def plan(user_query, depth="L2", project_context=None):
     project_context: 项目背景（技术栈/约束/目标），只在整合阶段使用，不注入搜索主题。
     返回 {original_query, project_context, depth, sub_questions, ...}。
     """
-    sp = _get_search_platform()
-    kp = _get_synthesis_platform()
+    sp = get_search_platform()
+    kp = get_synthesis_platform()
     sub_questions = []
 
     if depth == "L2":

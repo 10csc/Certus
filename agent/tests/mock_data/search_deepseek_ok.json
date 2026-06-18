@@ -1,0 +1,19 @@
+{
+  "_type": "search_ok",
+  "_description": "正常搜索回复 —— DeepSeek 返回完整分析",
+  "platform": "deepseek",
+  "query": "Rust trait 和 Go interface 的设计差异",
+  "content": "[搜索主题：Rust trait 和 Go interface 的设计差异]\n\n## Rust trait vs Go interface 设计差异分析\n\n### 1. 核心哲学差异\n**Rust trait** 采用「类型类」(typeclass) 范式，强调零成本抽象和编译期多态。trait 定义行为契约，由编译器在编译期单态化(monomorphization)，无虚函数调用开销。\n\n**Go interface** 采用「隐式实现」范式，强调简单和灵活。任何类型只要实现了接口定义的方法集，就自动满足该接口，无需显式声明。\n\n### 2. 关键对比\n\n| 维度 | Rust trait | Go interface |\n|------|-----------|-------------|\n| 实现方式 | 显式 impl Trait for Type | 隐式满足 |\n| 多态 | 编译期(impl Trait/dyn Trait) | 运行时(interface 值) |\n| 泛型 | 支持泛型约束 | 不支持泛型 |\n| 性能 | 零成本抽象 | 动态分发有开销 |\n| 安全性 | 编译期 trait bound 检查 | 运行时类型断言 |\n\n### 3. 选型建议\n- **性能敏感系统**: 优先 Rust trait，编译期优化更彻底\n- **快速开发/微服务**: Go interface 更简洁，隐式实现降低耦合\n- **跨团队协作**: Go interface 更友好，不需要理解复杂 trait bound\n\n[可靠性: 已确认=8 推断=2 未确认=0 可靠=true]\n\n[搜索主题：Rust trait 和 Go interface 的设计差异]",
+  "reliability": {
+    "confirmed": 8,
+    "inferred": 2,
+    "unconfirmed": 0,
+    "reliable": true
+  },
+  "links": [
+    "https://doc.rust-lang.org/book/ch10-02-traits.html",
+    "https://go.dev/tour/methods/9",
+    "https://github.com/rust-lang/rfcs/blob/master/text/0010-trait-objects.md"
+  ],
+  "report": "# Rust trait vs Go interface 设计差异\n\n## 概述\nRust trait 采用显式类型类范式，Go interface 采用隐式实现范式。\n\n## 核心发现\n- Rust trait 编译期单态化，零运行时开销\n- Go interface 隐式满足，降低耦合但动态分发有开销\n\n## 选型建议\n性能敏感选 Rust，快速开发选 Go。"
+}

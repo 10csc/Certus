@@ -8,7 +8,18 @@
 加新平台只需改 config.json，零代码改动。
 """
 
-import os, sys, time, re
+import os, sys, time, re, threading
+
+# C++ 取消信号（跨线程通信）
+try:
+    from agent_protocol import cancel_flag
+except ImportError:
+    cancel_flag = threading.Event()  # CLI 模式回退
+
+class ConfigError(Exception):
+    """配置错误——重试无意义，应立即终止。"""
+    pass
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
@@ -17,20 +28,15 @@ from common import (
     load_config, ensure_browser, ensure_page, safe_page_text,
     get_or_create_project, get_session_url, is_valid_session_url, DEFAULT_CDP_PORT,
     submit_and_verify, save_result,
+    get_search_platform, get_synthesis_platform,
 )
 from generator import load_platform_module
 from prompt_builder import build_search_prompt, build_synthesis_prompt, validate_prompt, assess_reliability
 from extractor import extract_with_diagnosis, is_content_complete
+from synthesizer import analyze_sources
 from logger import log_entry
 from diagnostics import diagnose, format_diagnosis
 
-
-def _get_search_platform():
-    return load_config().get("search_platform", "deepseek")
-
-
-def _get_synthesis_platform():
-    return load_config().get("synthesis_platform", "deepseek")
 
 GAP_KEYWORDS = [
     "需要进一步了解", "建议查阅", "建议参考",
@@ -51,82 +57,74 @@ def detect_gaps(content):
 
 
 def extract_links(content):
+    """从内容中提取所有 URL。同时从 [已确认:URL] [已验证:URL] 标记中提取。"""
     if not content: return []
+    # 1. 通用 URL 正则
     urls = re.findall(r'https?://[^\s<>"\')\]]+', content)
+    # 2. 从可靠性标记中提取 [已确认:URL] [已验证:URL]
+    marker_urls = re.findall(r'\[(?:已确认|已验证)\s*:\s*(https?://[^\]]+)\]', content)
+    urls.extend(marker_urls)
     seen, result = set(), []
     for u in urls:
-        u = u.rstrip(".,;:")
-        if u not in seen and len(u) > 30:
+        u = u.rstrip(".,;: ")
+        if u not in seen and len(u) > 20:
             seen.add(u); result.append(u)
-    return result[:20]
+    return result[:30]
+
+
+def extract_named_sources(content):
+    """从 [已确认:名称] [已验证:名称] 中提取具名信源（非URL但可分类）。
+
+    用于信源分布统计——即使 AI 没给 URL，也能从信源名称推分类。
+    """
+    if not content: return []
+    # 匹配 [已确认:xxx] 或 [已验证:xxx]，其中 xxx 不是 URL
+    markers = re.findall(
+        r'\[(?:已确认|已验证)\s*:\s*([^]]+)\]', content
+    )
+    sources = []
+    seen = set()
+    for m in markers:
+        m = m.strip()
+        # 跳过纯 URL（由 extract_links 处理）和太短的
+        if m.startswith("http") or len(m) < 3 or m in seen:
+            continue
+        seen.add(m)
+        # 用 URL 分类器对名称做启发式分类
+        from synthesizer import classify_source
+        cat = classify_source(m.lower())
+        sources.append({"url": f"named:{m}", "category": cat, "score": 4})
+    return sources
 
 
 def _synthesize_local(materials, user_query):
     """本地 API 总结 — 纯文本调用，不触发搜索循环。"""
-    import json as _json, ssl, urllib.request
-    try:
-        config = load_config()
-        api_url = config.get("deepseek_api", "https://api.deepseek.com/v1")
-        api_key = config.get("deepseek_key", "")
-        if not api_key:
-            return None
-
-        payload = _json.dumps({
-            "model": "deepseek-v4-pro",
-            "messages": [
-                {"role": "system", "content": "你是技术报告生成器。基于采集素材生成完整研究报告（概述、核心发现、方案对比、风险评估）。纯 Markdown，中文。"},
-                {"role": "user", "content": f"原始问题：{user_query}\n\n采集素材：\n{materials[:25000]}\n\n请基于以上素材生成完整研究报告。注意：只做总结归纳，不发起新的联网搜索。"}
-            ],
-            "temperature": 0.3, "max_tokens": 4096,
-        }, ensure_ascii=False).encode("utf-8")
-
-        req = urllib.request.Request(
-            f"{api_url}/chat/completions",
-            data=payload,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        )
-        ctx = ssl.create_default_context()
-        resp = urllib.request.urlopen(req, timeout=120, context=ctx)
-        body = _json.loads(resp.read().decode("utf-8"))
-        return body["choices"][0]["message"]["content"]
-    except Exception as e:
-        print(f"  [本地总结] 失败: {e}")
-        return None
+    from common import call_deepseek_api
+    return call_deepseek_api(
+        system_prompt="你是技术报告生成器。基于采集素材生成完整研究报告（概述、核心发现、方案对比、风险评估）。纯 Markdown，中文。",
+        user_prompt=f"原始问题：{user_query}\n\n采集素材：\n{materials[:60000]}\n\n请基于以上素材生成完整研究报告。注意：只做总结归纳，不发起新的联网搜索。",
+        model="deepseek-v4-pro",
+        max_tokens=8192,
+        temperature=0.3,
+        timeout=120,
+    )
 
 
 def _is_valid_synthesis(content, max_chars=2000):
     """LLM 判断合成内容是否有效（非拒绝/道歉/空话）。返回 (bool, str)。"""
-    import json as _json, ssl, urllib.request
-    try:
-        config = load_config()
-        api_url = config.get("deepseek_api", "https://api.deepseek.com/v1")
-        api_key = config.get("deepseek_key", "")
-        if not api_key:
-            return True, "无 API key，默认通过"
-
-        sample = content[:max_chars]
-        payload = _json.dumps({
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "system", "content": "你是一个内容质量检测器。只回复 YES 或 NO。"},
-                {"role": "user", "content": f"以下文本是否是一份有效的研究整合报告（包含分析、结论、验证标注）？如果文本主要是道歉、拒绝、高峰期提示、或只有搜索URL列表没有分析，回复 NO。\n\n{sample}"}
-            ],
-            "temperature": 0.0, "max_tokens": 2,
-        }, ensure_ascii=False).encode("utf-8")
-
-        req = urllib.request.Request(
-            f"{api_url}/chat/completions",
-            data=payload,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        )
-        ctx = ssl.create_default_context()
-        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
-        body = _json.loads(resp.read().decode("utf-8"))
-        answer = body["choices"][0]["message"]["content"].strip().upper()
-        return answer.startswith("YES"), f"LLM判定: {answer}"
-    except Exception as e:
-        print(f"  [验证检测] LLM 调用失败，默认通过: {e}")
-        return True, f"检测异常，默认通过"
+    from common import call_deepseek_api
+    sample = content[:max_chars]
+    answer = call_deepseek_api(
+        system_prompt="你是一个内容质量检测器。只回复 YES 或 NO。",
+        user_prompt=f"以下文本是否是一份有效的研究整合报告（包含分析、结论、验证标注）？如果文本主要是道歉、拒绝、高峰期提示、或只有搜索URL列表没有分析，回复 NO。\n\n{sample}",
+        model="deepseek-chat",
+        max_tokens=2,
+        temperature=0.0,
+        timeout=30,
+    )
+    if answer is None:
+        return False, "检测异常(API调用失败)，默认拒绝"
+    return answer.strip().upper().startswith("YES"), f"LLM判定: {answer.strip()}"
 
 
 def _evolve_upload(platform, page):
@@ -173,8 +171,8 @@ def check_platform_config(project=None):
     """首次使用检查：打印各平台配置状态。"""
     from common import get_session_url, is_valid_session_url
     lines = []
-    sp = _get_search_platform()
-    kp = _get_synthesis_platform()
+    sp = get_search_platform()
+    kp = get_synthesis_platform()
     for plat in list(dict.fromkeys([sp, kp])):  # 去重
         url = get_session_url(project=project, platform=plat)
         ok = is_valid_session_url(url, plat)
@@ -191,9 +189,12 @@ def _submit_to_platform(platform, page, prompt, topic):
         remaining, ok = submit_and_verify(plat, page, prompt)
         if ok:
             return True, None
-        # 输入框未清空：重试一次
+        # 输入框未清空：重试一次（带回验证）
         plat.submit(page); time.sleep(1.5)
-        return True, None  # 尽力了
+        remaining2, ok2 = submit_and_verify(plat, page, prompt)
+        if ok2:
+            return True, None
+        return False, f"重试后仍失败(remaining={remaining2})"
     except Exception as e:
         return False, str(e)
 
@@ -217,9 +218,10 @@ def _send_one(browser, platform, question, config, project, depth, decomposed, s
 
     if not is_valid_session_url(session_url, platform):
         print(f"  [{platform}] ⚠ 未配置聊天链接（当前是首页，无法使用）")
-        print(f"  [{platform}] → 请在浏览器中打开 {platform} 创建聊天，把 URL 贴到 config.json")
-        print(f"  [{platform}] → 路径: sessions.{project}.{platform}")
-        return None, None, None
+        print(f"  [{platform}] → 请先在浏览器中打开 {platform} 创建一个新聊天")
+        print(f"  [{platform}] → 然后把聊天 URL 贴到 ConfigPage「项目管理」→「{project}」的 {platform} 链接")
+        # 返回特殊错误标记——这是配置问题，重试无意义
+        raise ConfigError(f"项目「{project}」未配置 {platform} 会话链接")
 
     try:
         page = ensure_page(browser, session_url, new_tab=False)
@@ -233,8 +235,8 @@ def _send_one(browser, platform, question, config, project, depth, decomposed, s
         print(f"  [{platform}] 发送失败 ({str(err)[:40]})，重试...")
         try:
             page = ensure_page(browser, session_url, new_tab=False); time.sleep(2)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [{platform}] 页面重连异常: {e}", file=sys.stderr)
         ok_send, err = _submit_to_platform(platform, page, prompt, topic)
         if not ok_send:
             print(f"  [{platform}] 重试失败: {err}")
@@ -250,9 +252,10 @@ def _send_one(browser, platform, question, config, project, depth, decomposed, s
     return page, prompt, topic
 
 
-def _wait_one(platform, page, prompt, topic, max_wait=180):
+def _wait_one(platform, page, prompt, topic, max_wait=180, on_event=None, stage_name="search"):
     """轮询等待提取。DOM 提取为主（避免 textContent 漏标记），结尾标记判定完成。
 
+    on_event: 可选回调，用于推送 stage_progress 事件到 C++ 前端。
     textContent 兜底路径接入自进化：提取失败时触发 FailureAnalyzer → StrategyAdapter。
     """
     from evolution import load_or_create_polling, load_or_create_profile
@@ -266,17 +269,31 @@ def _wait_one(platform, page, prompt, topic, max_wait=180):
     deadline = time.time() + max_wait
     last_len, stable_count = 0, 0
     start_ts = time.time()
-    no_closing_stable = 0       # 无结尾标记但内容稳定的轮数
+    no_closing_stable = 0
     closing_marker = f"[搜索主题：{topic}]"
+    last_progress_time = 0  # 进度推送节流
 
     print(f"  [轮询] 间隔={interval}s 稳定阈值={stability_rounds}轮 (DOM模式)")
 
     while time.time() < deadline:
         time.sleep(interval)
+
+        # 检查 C++ 取消信号
+        if cancel_flag.is_set():
+            print(f"  [轮询] 收到取消信号，中止等待 ({platform})")
+            return None
+
         elapsed = int(time.time() - start_ts)
 
         # 主导：DOM 直接提取最后一个 AI 回复
         content = dom_extract(page, platform)
+
+        # 动态进度推送（节流：每 3s 最多推一次）
+        if on_event and time.time() - last_progress_time >= 3.0:
+            last_progress_time = time.time()
+            on_event("stage_progress", stage=stage_name, platform=platform,
+                     elapsed_sec=elapsed,
+                     content_len=len(content) if content else 0)
 
         if content and is_content_complete(content, platform=platform):
             tail = content.strip()[-300:]
@@ -327,8 +344,8 @@ def _wait_one(platform, page, prompt, topic, max_wait=180):
                         analysis = FailureAnalyzer.analyze(raw, txt_content, platform, profile)
                         if analysis and analysis.get("adaptable"):
                             StrategyAdapter.adapt(profile, analysis)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"  [自适应] FailureAnalyzer 异常: {e}", file=sys.stderr)
                 if txt_content and is_content_complete(txt_content, platform=platform):
                     tail = txt_content.strip()[-300:]
                     if closing_marker in tail:
@@ -350,8 +367,8 @@ def _wait_one(platform, page, prompt, topic, max_wait=180):
                 analysis = FailureAnalyzer.analyze(raw, content, platform, profile)
                 if analysis and analysis.get("actionable"):
                     StrategyAdapter.adapt(profile, analysis)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [自适应] 超时诊断异常: {e}", file=sys.stderr)
         if content and len(content) > 150:
             return content
     return None
@@ -385,22 +402,27 @@ def _diagnose_and_adapt(error_type, platform=None):
             }
             adapted = StrategyAdapter.adapt(ep, diagnosis)
             if adapted:
-                print(f"  [进化] 策略已适配: {adapted.get('changes', [])}")
-        except Exception:
-            pass
+                print(f"  [自适应] 策略已适配: {adapted.get('changes', [])}")
+        except Exception as e:
+            print(f"  [自适应] _diagnose_and_adapt 异常: {e}", file=sys.stderr)
 
     return result
 
 
-def execute(plan_dict, progress_callback=None):
+def execute(plan_dict, progress_callback=None, on_event=None):
     """执行搜索计划。
 
     L2: 单平台搜索 + 可靠性评估（无重搜）
     L3: 搜索（可靠性循环）+ 整合验证（被动验证模式）
+
+    on_event: 可选回调 on_event(event_type, **payload)，用于推送 JSON 事件到 stdout。
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
+        if on_event:
+            on_event("error", error_type="import_failed", platform="system",
+                     detail="未安装 playwright")
         return {"error": "未安装 playwright"}
 
     config = load_config()
@@ -409,27 +431,44 @@ def execute(plan_dict, progress_callback=None):
     sqs = plan_dict["sub_questions"]
     results = []
     all_links = []
-    sp = _get_search_platform()
-    kp = _get_synthesis_platform()
+    sp = get_search_platform()
+    kp = get_synthesis_platform()
     send_failures = 0
     MAX_SEND_FAILURES = 3
     replan = plan_dict.get("replan_triggers", {})
     max_research_rounds = replan.get("max_research_rounds", 2)
 
     with sync_playwright() as p:
-        browser, _ = ensure_browser(p, config.get("cdp_port", DEFAULT_CDP_PORT))
+        browser, _ = ensure_browser(p, config.get("cdp_port", DEFAULT_CDP_PORT),
+                                   launch_policy="external")
 
         if depth == "L2":
             # === L2: 单平台搜索 + 可靠性评估 ===
             sq = sqs[0]
             stage = sq.get("stage", "search")
             print(f"\n[Send] L2 {sp}: {sq['question'][:50]}")
-            page, prompt, topic = _send_one(browser, sp, sq["question"],
-                                            config, project, depth, True, stage)
+            if on_event:
+                on_event("stage_start", stage="search_1", question=sq["question"], platform=sp)
+            try:
+                page, prompt, topic = _send_one(browser, sp, sq["question"],
+                                                config, project, depth, True, stage)
+            except ConfigError as ce:
+                print(f"  ⛔ 配置错误: {ce}")
+                if on_event:
+                    on_event("error", error_type="config_error", platform=sp, detail=str(ce))
+                return {
+                    "results": [],
+                    "error": str(ce),
+                    "links": [], "all_sources": [],
+                    "original_query": plan_dict.get("original_query", ""),
+                }
             if page:
                 send_failures = 0
                 print(f"  [等待] 提取中...")
-                content = _wait_one(sp, page, prompt, topic, max_wait=180)
+                t_start = time.time()
+                content = _wait_one(sp, page, prompt, topic, max_wait=180,
+                                    on_event=on_event, stage_name="search_1")
+                elapsed = time.time() - t_start
                 if content:
                     reliability = assess_reliability(content)
                     gaps = detect_gaps(content)
@@ -440,14 +479,29 @@ def execute(plan_dict, progress_callback=None):
                         "content_len": len(content), "reliability": reliability})
                     log_entry(project, "output", f"[{sp}] {len(content)}字符 可靠={reliability.get('reliable')}")
                     print(f"  [{sp}] ✓ {len(content)}字符 可靠={reliability.get('reliable')}")
+                    if on_event:
+                        source_analysis = analyze_sources(links)
+                        # 合并具名信源（无URL的信源标记）
+                        named = extract_named_sources(content)
+                        all_sources = source_analysis.get("sources", []) + named
+                        on_event("stage_done", stage="search_1", platform=sp,
+                                 content_len=len(content), reliability=reliability,
+                                 elapsed_sec=round(elapsed, 1),
+                                 sources=all_sources)
                 else:
                     results.append({"question": sq["question"], "platform": sp,
                                     "content": None, "error": "提取超时", "gaps": [], "links": []})
+                    if on_event:
+                        on_event("stage_done", stage="search_1", platform=sp,
+                                 content_len=0, status="timeout", error="提取超时")
             else:
                 send_failures += 1
                 if send_failures >= MAX_SEND_FAILURES:
                     print(f"  ⛔ 连续 {send_failures} 次发送失败，请手动检查浏览器状态后重试")
                     _diagnose_and_adapt("send_failed", platform=sp)
+                    if on_event:
+                        on_event("error", error_type="send_failed", platform=sp,
+                                 detail=f"连续{send_failures}次发送失败")
         else:
             # === L3: 搜索（可靠性循环）+ 整合验证 ===
             search_sqs = [s for s in sqs if s.get("stage") != "synthesis"]
@@ -455,28 +509,55 @@ def execute(plan_dict, progress_callback=None):
 
             # --- 阶段 1: 搜索 + 可靠性循环 ---
             for i, sq in enumerate(search_sqs):
+                if cancel_flag.is_set():
+                    print("  [取消] 搜索已取消，跳过剩余问题")
+                    break
+
+                stage_name = f"search_{i+1}"
                 print(f"\n[Search] L3 [{i+1}/{len(search_sqs)}] {sp}: {sq['question'][:60]}")
+                if on_event:
+                    on_event("stage_start", stage=stage_name, question=sq["question"], platform=sp)
                 content = None
                 reliability = None
                 re_search_count = 0
 
                 for round_num in range(max_research_rounds + 1):
+                    if cancel_flag.is_set():
+                        print("  [取消] 搜索已取消，中止可靠性循环")
+                        break
                     if round_num > 0:
                         print(f"  [重搜] 第{round_num}轮 ({sq['question'][:40]}...)")
-                    page, prompt, topic = _send_one(browser, sp, sq["question"],
-                                                    config, project, depth, True, "search")
+                    try:
+                        page, prompt, topic = _send_one(browser, sp, sq["question"],
+                                                        config, project, depth, True, "search")
+                    except ConfigError as ce:
+                        print(f"  ⛔ 配置错误: {ce}")
+                        if on_event:
+                            on_event("error", error_type="config_error", platform=sp,
+                                     detail=str(ce))
+                        # 配置错误不可恢复，直接终止整个搜索
+                        raise
                     if not page:
                         send_failures += 1
                         if send_failures >= MAX_SEND_FAILURES:
                             print(f"  ⛔ 连续 {send_failures} 次发送失败，请手动检查浏览器状态后重试")
                             _diagnose_and_adapt("send_failed", platform=sp)
+                            if on_event:
+                                on_event("error", error_type="send_failed", platform=sp,
+                                         detail=f"连续{send_failures}次发送失败")
                             break
                         continue
 
                     send_failures = 0
                     print(f"  [等待] 提取中...")
-                    content = _wait_one(sp, page, prompt, topic, max_wait=180)
+                    t_start = time.time()
+                    content = _wait_one(sp, page, prompt, topic, max_wait=180,
+                                        on_event=on_event,
+                                        stage_name=f"search_{i+1}")
+                    elapsed = time.time() - t_start
                     if not content:
+                        if cancel_flag.is_set():
+                            print("  [取消] 提取已取消")
                         break
 
                     reliability = assess_reliability(content)
@@ -497,8 +578,8 @@ def execute(plan_dict, progress_callback=None):
                                 "adaptable": True,
                                 "scope": "platform_specific",
                             })
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"  [自适应] 可靠性适配异常: {e}", file=sys.stderr)
 
                     if reliability["reliable"]:
                         break
@@ -516,14 +597,27 @@ def execute(plan_dict, progress_callback=None):
                         "re_search_count": re_search_count})
                     log_entry(project, "output", f"[{sp}] {len(content)}字符 重搜={re_search_count}次")
                     print(f"  [{sp}] ✓ {len(content)}字符 (重搜{re_search_count}次)")
+                    if on_event:
+                        source_analysis = analyze_sources(links)
+                        named = extract_named_sources(content)
+                        on_event("stage_done", stage=stage_name, platform=sp,
+                                 content_len=len(content), reliability=reliability or {},
+                                 elapsed_sec=round(elapsed, 1),
+                                 re_search_count=re_search_count,
+                                 sources=source_analysis.get("sources", []) + named)
                 else:
                     results.append({"question": sq["question"], "platform": sp,
                                     "content": None, "error": "提取超时", "gaps": [], "links": []})
                     print(f"  [{sp}] ✗ 提取超时")
+                    if on_event:
+                        on_event("stage_done", stage=stage_name, platform=sp,
+                                 content_len=0, status="timeout", error="提取超时")
 
             # --- 阶段 2: 整合验证 ---
             if synth_sqs:
                 sq = synth_sqs[0]
+                if on_event:
+                    on_event("stage_start", stage="synthesis", question=sq["question"], platform=kp)
                 # 1. 采集素材写入临时文件
                 materials = "\n\n---\n\n".join([
                     f"## 采集方向 {i+1}\n{r['content']}"
@@ -607,8 +701,8 @@ def execute(plan_dict, progress_callback=None):
                                 plat_mod2 = load_platform_module(kp)
                                 if plat_mod2 and hasattr(plat_mod2, "upload_file"):
                                     plat_mod2.upload_file(page, mat_file)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"  [{kp}] 文件上传异常: {e}", file=sys.stderr)
                         ok_send, err = _submit_to_platform(kp, page, prompt, topic)
                         if not ok_send:
                             print(f"  [{kp}] 重试失败: {err}")
@@ -628,7 +722,8 @@ def execute(plan_dict, progress_callback=None):
                     except Exception: pass
 
                     print(f"  [等待] {kp} 验证整合中...")
-                    content = _wait_one(kp, page, prompt, topic, max_wait=300)
+                    content = _wait_one(kp, page, prompt, topic, max_wait=300,
+                                        on_event=on_event, stage_name="synthesis")
                     if content:
                         valid, reason = _is_valid_synthesis(content)
                         if not valid:
@@ -657,19 +752,97 @@ def execute(plan_dict, progress_callback=None):
                         results.append({"question": sq["question"], "platform": kp,
                                         "content": None, "error": "超时", "gaps": [], "links": []})
 
+                # 整合阶段完成事件
+                if on_event and synth_sqs:
+                    synth_result = None
+                    for r in reversed(results):
+                        if r.get("question") == synth_sqs[0]["question"]:
+                            synth_result = r
+                            break
+                    if synth_result:
+                        if synth_result.get("content"):
+                            on_event("stage_done", stage="synthesis", platform=kp,
+                                     content_len=synth_result.get("content_len", 0))
+                        else:
+                            on_event("stage_done", stage="synthesis", platform=kp,
+                                     content_len=0, status="failed",
+                                     error=synth_result.get("error", "未知错误"))
+
     # 清理临时材料文件
     try:
         mat_file = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "_materials.md")
         if os.path.exists(mat_file):
             os.remove(mat_file)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [final_review] 临时文件清理异常: {e}", file=sys.stderr)
 
     return {
         "results": results,
         "gaps_total": sum(len(r.get("gaps", [])) for r in results),
         "all_links": list(set(all_links)),
     }
+
+
+def final_review(results, user_query):
+    """LLM API 最终审阅：对搜索结果做审查、整理、总结。
+
+    在所有平台内容提取完成后，调用 DeepSeek API 对原始素材进行最终编辑审阅，
+    生成一份逻辑一致、格式统一、显式标注不确定信息的中文研究报告。
+
+    返回: (reviewed_report: str, meta: dict)
+    - 无 API key 时返回 (None, {"reviewed": False, "reason": "..."})
+    """
+    from common import call_deepseek_api
+
+    # 组装各平台素材（带可靠性标注）
+    parts = []
+    for i, r in enumerate(results):
+        if not r.get("content"):
+            continue
+        plat = r.get("platform", "unknown")
+        content = r["content"]
+        reliability = r.get("reliability", {})
+        gaps = r.get("gaps", [])
+
+        header = f"## 来源 {i+1}: {plat}\n"
+        header += f"内容长度: {len(content)} 字符"
+        if reliability:
+            header += f" | 已确认: {reliability.get('confirmed', 0)} 推断: {reliability.get('inferred', 0)} 未确认: {reliability.get('unconfirmed', 0)}"
+        if gaps:
+            header += f" | 信息缺口: {len(gaps)} 处"
+        header += f"\n"
+        parts.append(header + content[:10000])
+
+    materials = "\n\n---\n\n".join(parts)
+
+    if len(materials) < 100:
+        return None, {"reviewed": False, "reason": "素材内容不足"}
+
+    reviewed = call_deepseek_api(
+        system_prompt=(
+            "你是资深技术研究报告编辑。你的任务是对研究素材进行最终审阅整理。"
+            "遵循原则：\n"
+            "1. 保持原内容实质信息不变，不添加虚构信息\n"
+            "2. 检查逻辑一致性，标注矛盾或不确定之处\n"
+            "3. 统一格式为清晰的中文 Markdown 报告\n"
+            "4. 推荐结构：概述 → 核心发现 → 方案对比（如有）→ 风险与不确定性 → 总结建议\n"
+            "5. 对未确认的信息显式标注「待验证」\n"
+            "6. 保留原始来源和引用信息"
+        ),
+        user_prompt=(
+            f"原始问题：{user_query}\n\n"
+            f"以下是从各平台采集的研究素材（已附可靠性标注）：\n\n{materials[:60000]}\n\n"
+            "请对以上素材进行最终审阅整理，生成一份完整、清晰、可靠的中文研究报告。"
+        ),
+        model="deepseek-v4-pro",
+        max_tokens=8192,
+        temperature=0.3,
+        timeout=180,
+    )
+
+    if reviewed is None:
+        return None, {"reviewed": False, "reason": "API 调用失败"}
+    return reviewed, {"reviewed": True}
 
 
 def execute_simple(query, platform="deepseek", depth="L2"):

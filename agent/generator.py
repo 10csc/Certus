@@ -121,10 +121,7 @@ def generate_interaction_script(page, platform, url):
 
 
 def _call_llm_generate(platform, url, dom_info):
-    """调用本地 LLM 生成平台交互脚本"""
-    config = load_config()
-    api_url = config.get("deepseek_api", "http://localhost:3688/v1")
-    
+    """调用 DeepSeek API 生成平台交互脚本。"""
     pitfalls_path = os.path.join(SCRIPTS_DIR, "..", "references", "pitfalls.md")
     pitfalls_text = ""
     if os.path.exists(pitfalls_path):
@@ -183,21 +180,20 @@ def _call_llm_generate(platform, url, dom_info):
 生成完整的 Python 模块代码："""
 
     try:
-        from openai import OpenAI
-        client = OpenAI(base_url=api_url, api_key="local")
-        resp = client.chat.completions.create(
+        from common import call_deepseek_api
+        content = call_deepseek_api(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             model="deepseek-v4-pro",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1, max_tokens=4096,
+            max_tokens=4096,
+            temperature=0.1,
+            timeout=120,
         )
-        content = resp.choices[0].message.content.strip()
+        if not content:
+            raise RuntimeError("API 返回空")
         # 清理 markdown 代码块
         if content.startswith("```"):
             lines = content.split("\n")
-            # 去掉第一行 ```python 和最后一行 ```
             content = "\n".join(lines[1:]) if lines[0].startswith("```") else content
             if content.endswith("```"):
                 content = content[:-3].strip()
@@ -205,7 +201,6 @@ def _call_llm_generate(platform, url, dom_info):
     except Exception as e:
         print(f"    LLM 生成失败: {e}")
         print(f"[!] 降级到通用兜底模板 -- 发送/提取不受影响，但平台适配可能不完美")
-        print(f"[!] 如需优化，可等 LLM API 恢复后 --regenerate 重新定型")
         return _fallback_template(platform)
 
 

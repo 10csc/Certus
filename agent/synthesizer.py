@@ -159,12 +159,21 @@ def cross_validate(results):
         all_unique_urls.update(ac["urls"])
     single_urls = list(all_unique_urls - set(confirmed_urls))
 
+    # 基础矛盾检测：多平台无共同信源时标记为信心低
+    contradictions = []
+    if len(all_claims) >= 2 and not confirmed_urls:
+        contradictions.append({
+            "type": "disjoint_sources",
+            "platforms": [ac["platform"] for ac in all_claims],
+            "note": "不同平台引用完全不同来源，结论需要额外验证",
+        })
+
     return {
         "level": "cross_validated" if confirmed_urls else "multi_source_no_overlap",
         "platforms": [r.get("platform", "?") for r in results if r.get("content")],
         "confirmed_urls": list(set(confirmed_urls))[:10],
         "single_source_urls": single_urls[:10],
-        "contradictions": [],  # 矛盾检测需要更深的语义分析，此处做结构占位
+        "contradictions": contradictions,
         "confidence": "中" if confirmed_urls else "低",
         "note": f"{len(confirmed_urls)} 个 URL 被多平台引用" if confirmed_urls else "各平台引用不同来源，建议关键结论额外验证",
     }
@@ -208,8 +217,8 @@ def generate_report(query, results, validation, output_path=None):
 
         # 正文（截断过长内容）
         content = r["content"]
-        if len(content) > 5000:
-            content = content[:5000] + f"\n\n... (截断，全文 {r['content_len']} 字符)"
+        if len(content) > 20000:
+            content = content[:20000] + f"\n\n... (截断，全文 {r['content_len']} 字符)"
         lines.append(content)
         lines.append(f"")
 

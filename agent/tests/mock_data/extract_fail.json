@@ -1,0 +1,10 @@
+{
+  "_type": "extract_fail",
+  "_description": "提取失败 —— DOM 选择器未匹配，textContent 兜底也失败",
+  "platform": "deepseek",
+  "query": "Python asyncio 最佳实践",
+  "page_text_length": 15000,
+  "marker_count": 0,
+  "detail": "页面 15000 字符中未找到标记 [搜索主题：Python asyncio 最佳实践]，DOM 选择器 'div[class*=\"message\"]' 匹配 0 个元素，textContent 提取内容仅 80 字符（全是 UI 文本）",
+  "error_type": "extract_failed"
+}

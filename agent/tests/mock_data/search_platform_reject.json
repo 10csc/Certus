@@ -1,0 +1,9 @@
+{
+  "_type": "platform_reject",
+  "_description": "平台拒绝服务 —— DeepSeek 高峰期拒绝请求",
+  "platform": "deepseek",
+  "query": "人工智能最新进展",
+  "reject_message": "高峰期算力不足，请稍后重试",
+  "suggestion": "try_other_platform",
+  "detail": "deepseek 返回 503 + '高峰期算力不足' 提示，建议切换至 kimi 或 chatgpt"
+}

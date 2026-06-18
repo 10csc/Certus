@@ -1,0 +1,9 @@
+{
+  "_type": "search_timeout",
+  "_description": "搜索超时 —— AI 回复超过 180s 仍未完成",
+  "platform": "deepseek",
+  "query": "复杂的分布式系统设计问题",
+  "timeout_seconds": 180,
+  "partial_content": "[搜索主题：复杂的分布式系统设计问题]\n\n## 分布式系统设计\n\n### CAP 理论\nCAP 定理指出分布式系统无法同时满足一致性(Consistency)、可用性(Availability)和分区容错性(Partition Tolerance)...",
+  "detail": "AI 回复超过 180s 仍未生成结尾标记，DOM 提取最后一次返回 1200 字符但未完成"
+}
