@@ -36,10 +36,13 @@ private slots:
     void onSearchFinished(bool success, const QString &reportPath);
     void onStateChanged(int state);
     void updateStatusIndicator();
+    void updateSpinnerAnimation();
+    void updatePermanentStatus();
 
 private:
     void setupUi();
     void setupStatusBar();
+    void setupSidebarFooter();
 
     // 侧边栏 + 页面容器
     QListWidget *m_sidebar = nullptr;
@@ -56,6 +59,19 @@ private:
     QLabel *m_statusIcon = nullptr;
     QLabel *m_statusText = nullptr;
     QTimer *m_statusTimer = nullptr;
+
+    // 状态栏右侧永久控件
+    QLabel *m_statusProject = nullptr;   // 项目名
+    QLabel *m_statusDb      = nullptr;   // DB 状态
+    QLabel *m_statusBrowser  = nullptr;  // 浏览器状态
+
+    // Braille spinner
+    QTimer *m_spinnerTimer = nullptr;
+    int m_spinnerFrame = 0;
+    static constexpr const char *s_spinnerChars = "\u280B\u2819\u2839\u283C\u2834\u2826"; // ⠋⠙⠹⠼⠴⠦
+
+    // 侧边栏底部
+    QWidget *m_sidebarContainer = nullptr;
 
     // 后端
     AgentManager *m_agent = nullptr;

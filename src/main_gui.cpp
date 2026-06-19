@@ -15,6 +15,7 @@
 #include "core/database.h"
 #include "core/browsermanager.h"
 #include "utils/logger.h"
+#include "ui/theme.h"
 
 int main(int argc, char *argv[])
 {
@@ -52,6 +53,7 @@ int main(int argc, char *argv[])
     darkPalette.setColor(QPalette::Highlight, QColor(0, 120, 212));
     darkPalette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
     app.setPalette(darkPalette);
+    app.setStyleSheet(globalStyleSheet());  // 加载全局 QSS 主题
 
     // 初始化日志系统（路径相对于 exe 目录，兼容任意启动位置）
     QString logDir = QCoreApplication::applicationDirPath() + "/logs";

@@ -25,6 +25,7 @@
 class AgentManager;
 class Database;
 class BrowserManager;
+class StageProgress;
 
 class SearchPage : public QWidget {
     Q_OBJECT
@@ -73,6 +74,7 @@ private:
     BrowserManager *m_browser = nullptr;
 
     // 搜索区
+    QLabel *m_brandTitle = nullptr;        // 品牌标题
     QLineEdit *m_queryInput = nullptr;
     QRadioButton *m_l2Radio = nullptr;
     QRadioButton *m_l3Radio = nullptr;
@@ -80,13 +82,15 @@ private:
     QLabel *m_synthesisPlatformLabel = nullptr;
     QPushButton *m_searchButton = nullptr;
 
-    // 状态指示器（右下角五态灯）
+    // 状态指示器（五态灯）
     QLabel *m_statusIndicator = nullptr;
     QTimer *m_statusAnimTimer = nullptr;
     int m_statusAnimFrame = 0;
 
     // 进度区
-    QTextEdit *m_progressLog = nullptr;
+    StageProgress *m_stageProgress = nullptr;  // 可视化阶段进度
+    QTextEdit *m_progressLog = nullptr;        // 详细日志
+    QPushButton *m_toggleLogBtn = nullptr;     // 展开/收起日志
 
     // 报告区
     QTextBrowser *m_reportView = nullptr;
@@ -96,9 +100,11 @@ private:
     QTimer *m_configTimer = nullptr;
     QLabel *m_browserStatus = nullptr;
 
-    // 历史区
+    // 历史区（可折叠）
+    QLabel *m_historyToggle = nullptr;     // 点击折叠/展开
     QLineEdit *m_historyFilter = nullptr;
     QListWidget *m_historyList = nullptr;
+    bool m_historyExpanded = false;
 
     // 缓存系统
     QString m_lastSearchedQuery;        // 上次搜索的问题

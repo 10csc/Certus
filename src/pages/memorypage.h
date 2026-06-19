@@ -4,6 +4,7 @@
 #include <QListWidget>
 #include <QTextEdit>
 #include <QPushButton>
+#include <QLabel>
 #include <QProcess>
 
 class Database;
@@ -42,6 +43,7 @@ private:
     QPushButton *m_editBtn = nullptr;
     QPushButton *m_deleteBtn = nullptr;
     QPushButton *m_semanticBtn = nullptr;  // 语义搜索按钮
+    QLabel *m_countLabel = nullptr;        // 条目计数标签
 
     // id 缓存：与 m_list 行号一一对应
     QList<qint64> m_idCache;

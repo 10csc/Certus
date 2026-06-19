@@ -1,6 +1,7 @@
 #include "repairpage.h"
 #include "../core/database.h"
 #include "../utils/crypto.h"
+#include "../ui/theme.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QJsonDocument>
@@ -40,10 +41,6 @@ void RepairPage::setupUi()
     auto *toolbar = new QHBoxLayout();
 
     m_modelCombo = new QComboBox(this);
-    m_modelCombo->setStyleSheet(
-        "QComboBox{background:#333;color:#fff;border:1px solid #555;padding:6px 12px;}"
-        "QComboBox::drop-down{border:none;}"
-        "QComboBox QAbstractItemView{background:#333;color:#fff;selection-background:#0078d4;}");
     m_modelCombo->addItem("Claude Opus 4.7",    "claude|claude-opus-4-7");
     m_modelCombo->addItem("Claude Sonnet 4.6",  "claude|claude-sonnet-4-6");
     m_modelCombo->addItem("Claude Haiku 4.5",   "claude|claude-haiku-4-5");
@@ -55,17 +52,12 @@ void RepairPage::setupUi()
     toolbar->addSpacing(12);
 
     m_fileBtn = new QPushButton("+ 添加文件上下文", this);
-    m_fileBtn->setStyleSheet(
-        "QPushButton{background:#444;color:#ccc;border:1px solid #555;padding:6px 14px;border-radius:4px;}"
-        "QPushButton:hover{background:#555;color:#fff;}");
+    m_fileBtn->setProperty("cssClass", "secondary");
     connect(m_fileBtn, &QPushButton::clicked, this, &RepairPage::onSelectFiles);
     toolbar->addWidget(m_fileBtn);
 
     m_applyBtn = new QPushButton("应用修复", this);
-    m_applyBtn->setStyleSheet(
-        "QPushButton{background:#388e3c;color:white;border:none;padding:6px 14px;border-radius:4px;}"
-        "QPushButton:hover{background:#43a047;}"
-        "QPushButton:disabled{background:#444;color:#888;}");
+    m_applyBtn->setProperty("cssClass", "success");
     m_applyBtn->setEnabled(false);
     connect(m_applyBtn, &QPushButton::clicked, this, &RepairPage::onApplyFix);
     toolbar->addWidget(m_applyBtn);
@@ -76,9 +68,6 @@ void RepairPage::setupUi()
     // === 聊天视图 ===
     m_chatView = new QTextEdit(this);
     m_chatView->setReadOnly(true);
-    m_chatView->setStyleSheet(
-        "background:#1a1a1a; color:#ccc; border:1px solid #444; "
-        "border-radius:4px; padding:12px; font-size:13px;");
     m_chatView->setHtml(
         "<div style='color:#888; text-align:center; margin-top:60px;'>"
         "<p style='font-size:16px;'>辅助修复 —— 多模型 AI 诊断</p>"
@@ -91,16 +80,10 @@ void RepairPage::setupUi()
     auto *inputRow = new QHBoxLayout();
     m_input = new QLineEdit(this);
     m_input->setPlaceholderText("输入错误信息或问题...");
-    m_input->setStyleSheet(
-        "background:#333; color:#fff; border:1px solid #555; "
-        "border-radius:4px; padding:10px; font-size:13px;");
     connect(m_input, &QLineEdit::returnPressed, this, &RepairPage::onSend);
 
     m_sendBtn = new QPushButton("发送", this);
-    m_sendBtn->setStyleSheet(
-        "QPushButton{background:#0078d4;color:white;border:none;padding:10px 24px;border-radius:4px;}"
-        "QPushButton:hover{background:#0086f0;}"
-        "QPushButton:disabled{background:#444;color:#888;}");
+    m_sendBtn->setProperty("cssClass", "primary");
     connect(m_sendBtn, &QPushButton::clicked, this, &RepairPage::onSend);
 
     inputRow->addWidget(m_input, 1);
@@ -586,8 +569,11 @@ void RepairPage::scrollToBottom()
 void RepairPage::appendUserMessage(const QString &text)
 {
     m_chatView->append(
-        QString("<p style='color:#4fc3f7; margin:8px 0;'><strong>你:</strong> %1</p>")
-            .arg(text.toHtmlEscaped()));
+        QString("<div style='text-align:right; margin:8px 0;'>"
+                "<span style='background:%1; color:white; padding:8px 14px; "
+                "border-radius:12px 12px 2px 12px; display:inline-block; max-width:80%%; "
+                "font-size:13px;'>%2</span></div>")
+            .arg(Theme::Accent, text.toHtmlEscaped()));
     scrollToBottom();
 }
 

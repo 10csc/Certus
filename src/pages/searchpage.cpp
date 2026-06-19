@@ -2,6 +2,8 @@
 #include "../core/agentmanager.h"
 #include "../core/database.h"
 #include "../core/browsermanager.h"
+#include "../ui/theme.h"
+#include "../ui/stageprogress.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -83,142 +85,179 @@ void SearchPage::setBrowserManager(BrowserManager *browser)
 void SearchPage::setupUi()
 {
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(16, 16, 16, 16);
-    mainLayout->setSpacing(12);
+    mainLayout->setContentsMargins(20, 16, 20, 16);
+    mainLayout->setSpacing(8);
 
-    // === 搜索区 ===
-    auto *searchGroup = new QGroupBox("搜索", this);
-    searchGroup->setStyleSheet(
-        "QGroupBox { color: #ccc; font-weight: bold; border: 1px solid #444; "
-        "border-radius: 4px; margin-top: 8px; padding-top: 16px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }");
-    auto *searchLayout = new QVBoxLayout(searchGroup);
+    // === 品牌标题（空闲时显示） ===
+    m_brandTitle = new QLabel("Certus — AI 研究助手", this);
+    m_brandTitle->setAlignment(Qt::AlignCenter);
+    m_brandTitle->setStyleSheet(
+        QString("color: %1; font-size: 20px; font-weight: 300; padding: 8px 0;").arg(Theme::TextMuted));
+    mainLayout->addWidget(m_brandTitle);
 
+    // === 搜索框区（居中、突出） ===
     auto *inputRow = new QHBoxLayout();
     m_queryInput = new QLineEdit(this);
-    m_queryInput->setPlaceholderText("输入搜索问题...");
+    m_queryInput->setPlaceholderText("输入你想研究的问题...");
+    m_queryInput->setMinimumHeight(48);
     m_queryInput->setStyleSheet(
-        "QLineEdit { background: #333; color: #fff; border: 1px solid #555; "
-        "border-radius: 4px; padding: 10px; font-size: 14px; }");
-    m_queryInput->setMinimumHeight(40);
+        QString("QLineEdit { background: %1; color: %2; border: 2px solid %3; "
+                "border-radius: 8px; padding: 12px 16px; font-size: 16px; }"
+                "QLineEdit:focus { border: 2px solid %4; }")
+            .arg(Theme::BgInput, Theme::TextWhite, Theme::BorderLight, Theme::Accent));
 
-    m_searchButton = new QPushButton("开始搜索", this);
-    m_searchButton->setMinimumHeight(40);
-    m_searchButton->setMinimumWidth(100);
+    m_searchButton = new QPushButton("搜索", this);
+    m_searchButton->setMinimumHeight(48);
+    m_searchButton->setMinimumWidth(110);
+    m_searchButton->setProperty("cssClass", "primary");
     m_searchButton->setStyleSheet(
-        "QPushButton { background: #0078d4; color: white; border: none; "
-        "border-radius: 4px; font-size: 13px; padding: 8px 20px; }"
-        "QPushButton:hover { background: #0086f0; }"
-        "QPushButton:disabled { background: #444; color: #888; }");
+        QString("QPushButton { background: %1; color: white; border: none; "
+                "border-radius: 8px; font-size: 15px; font-weight: bold; padding: 12px 24px; }"
+                "QPushButton:hover { background: %2; }"
+                "QPushButton:disabled { background: %3; color: %4; }")
+            .arg(Theme::Accent, Theme::AccentHover, Theme::Border, Theme::TextMuted));
     connect(m_searchButton, &QPushButton::clicked, this, &SearchPage::onStartSearch);
     inputRow->addWidget(m_queryInput, 1);
     inputRow->addWidget(m_searchButton);
-    searchLayout->addLayout(inputRow);
+    mainLayout->addLayout(inputRow);
 
-    // 选项 + 状态行（深度 / 平台 / 浏览器 / 配置 合并一行）
+    // === 选项行（紧凑、无 GroupBox） ===
     auto *optionsRow = new QHBoxLayout();
+    optionsRow->setSpacing(12);
     auto *depthLabel = new QLabel("深度:", this);
-    depthLabel->setStyleSheet("color: #aaa;");
+    depthLabel->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextSecondary));
     m_l2Radio = new QRadioButton("L2", this);
     m_l3Radio = new QRadioButton("L3", this);
     m_l2Radio->setChecked(true);
-    m_l2Radio->setStyleSheet("color: #ccc;");
-    m_l3Radio->setStyleSheet("color: #ccc;");
     optionsRow->addWidget(depthLabel);
     optionsRow->addWidget(m_l2Radio);
     optionsRow->addWidget(m_l3Radio);
-    optionsRow->addSpacing(12);
-
-    // 平台只读标签（配置在 ConfigPage 中修改）
-    m_searchPlatformLabel = new QLabel("搜索: deepseek", this);
-    m_searchPlatformLabel->setStyleSheet("color: #4fc3f7; font-size: 12px;");
-    optionsRow->addWidget(m_searchPlatformLabel);
     optionsRow->addSpacing(8);
-    m_synthesisPlatformLabel = new QLabel("整合: kimi", this);
-    m_synthesisPlatformLabel->setStyleSheet("color: #81c784; font-size: 12px;");
-    optionsRow->addWidget(m_synthesisPlatformLabel);
-    optionsRow->addSpacing(12);
 
-    // 浏览器状态（只读，启动操作在配置页）
+    // 平台只读标签
+    m_searchPlatformLabel = new QLabel("搜索: deepseek", this);
+    m_searchPlatformLabel->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::Info));
+    optionsRow->addWidget(m_searchPlatformLabel);
+    m_synthesisPlatformLabel = new QLabel("整合: kimi", this);
+    m_synthesisPlatformLabel->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::Green));
+    optionsRow->addWidget(m_synthesisPlatformLabel);
+    optionsRow->addSpacing(8);
+
+    // 浏览器状态
     m_browserStatus = new QLabel("浏览器: 未检测", this);
-    m_browserStatus->setStyleSheet("color: #aaa; font-size: 12px;");
+    m_browserStatus->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextSecondary));
     optionsRow->addWidget(m_browserStatus);
     optionsRow->addSpacing(8);
 
     // 配置状态
     m_configStatus = new QLabel("配置: 检测中...", this);
-    m_configStatus->setStyleSheet("color: #888; font-size: 12px;");
+    m_configStatus->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextMuted));
     optionsRow->addWidget(m_configStatus);
-    optionsRow->addSpacing(8);
 
-    // 状态指示器（五态灯）
-    m_statusIndicator = new QLabel("○", this);  // ○ 空闲
-    m_statusIndicator->setStyleSheet("color: gray; font-size: 18px; margin-left: 4px;");
+    // 状态指示器
+    m_statusIndicator = new QLabel("○", this);
+    m_statusIndicator->setStyleSheet(QString("color: %1; font-size: 18px;").arg(Theme::TextMuted));
     m_statusIndicator->setToolTip("空闲");
     optionsRow->addWidget(m_statusIndicator);
 
-    // 状态动画定时器
     m_statusAnimTimer = new QTimer(this);
     m_statusAnimTimer->setInterval(400);
     connect(m_statusAnimTimer, &QTimer::timeout, this, &SearchPage::updateStatusAnimation);
 
     optionsRow->addStretch();
-    searchLayout->addLayout(optionsRow);
-    mainLayout->addWidget(searchGroup);
+    mainLayout->addLayout(optionsRow);
 
-    // === 进度 + 报告 ===
-    auto *splitter = new QSplitter(Qt::Vertical, this);
-    splitter->setStyleSheet("QSplitter::handle { background: #444; height: 2px; }");
+    // === 分隔线 ===
+    auto *sep = new QFrame(this);
+    sep->setFrameShape(QFrame::HLine);
+    sep->setStyleSheet(QString("color: %1;").arg(Theme::Border));
+    sep->setFixedHeight(1);
+    mainLayout->addWidget(sep);
+
+    // === 阶段进度指示器 ===
+    m_stageProgress = new StageProgress(this);
+    m_stageProgress->setMaximumHeight(80);
+    mainLayout->addWidget(m_stageProgress);
+
+    // === 详细日志（可折叠，默认隐藏） ===
+    m_toggleLogBtn = new QPushButton("▶ 详细日志", this);
+    m_toggleLogBtn->setStyleSheet(
+        QString("QPushButton { background: transparent; color: %1; border: none; "
+                "text-align: left; padding: 4px 0; font-size: 12px; }"
+                "QPushButton:hover { color: %2; }")
+            .arg(Theme::TextMuted, Theme::TextPrimary));
+    connect(m_toggleLogBtn, &QPushButton::clicked, this, [this]() {
+        bool visible = !m_progressLog->isVisible();
+        m_progressLog->setVisible(visible);
+        m_toggleLogBtn->setText(visible ? "▼ 详细日志" : "▶ 详细日志");
+    });
+    mainLayout->addWidget(m_toggleLogBtn);
 
     m_progressLog = new QTextEdit(this);
     m_progressLog->setReadOnly(true);
-    m_progressLog->setMaximumHeight(150);
-    m_progressLog->setStyleSheet(
-        "QTextEdit { background: #252525; color: #aaa; border: 1px solid #444; "
-        "border-radius: 4px; font-size: 12px; }");
+    m_progressLog->setMaximumHeight(120);
     m_progressLog->setPlaceholderText("搜索进度将在此显示...");
-    splitter->addWidget(m_progressLog);
+    m_progressLog->setVisible(false);  // 默认隐藏
+    mainLayout->addWidget(m_progressLog);
 
+    // === 报告视图（占满剩余空间） ===
     m_reportView = new QTextBrowser(this);
     m_reportView->setOpenExternalLinks(true);
     m_reportView->setStyleSheet(
-        "QTextBrowser { background: #1a1a1a; color: #ddd; border: 1px solid #444; "
-        "border-radius: 4px; font-size: 13px; }");
+        QString("QTextBrowser { background: %1; color: %2; border: 1px solid %3; "
+                "border-radius: 6px; font-size: 13px; }")
+            .arg("#1a1a1a", "#ddd", Theme::Border));
     m_reportView->setHtml(
         "<div style='color:#888; text-align:center; margin-top:80px;'>"
         "<p style='font-size:18px;'>Certus 研究报告</p>"
-        "<p>输入问题并点击「开始搜索」</p></div>");
-    splitter->addWidget(m_reportView);
-    mainLayout->addWidget(splitter, 1);
+        "<p>输入问题并点击「搜索」</p></div>");
+    mainLayout->addWidget(m_reportView, 1);
 
-    // === 历史记录 ===
-    auto *historyGroup = new QGroupBox("历史记录", this);
-    historyGroup->setStyleSheet(
-        "QGroupBox { color: #ccc; font-weight: bold; border: 1px solid #444; "
-        "border-radius: 4px; margin-top: 8px; padding-top: 16px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }");
-    auto *historyLayout = new QVBoxLayout(historyGroup);
+    // === 历史记录（可折叠，默认收起） ===
+    auto *historySep = new QFrame(this);
+    historySep->setFrameShape(QFrame::HLine);
+    historySep->setStyleSheet(QString("color: %1;").arg(Theme::Border));
+    historySep->setFixedHeight(1);
+    mainLayout->addWidget(historySep);
+
+    m_historyToggle = new QLabel("最近搜索 ▸", this);
+    m_historyToggle->setStyleSheet(
+        QString("QLabel { color: %1; font-size: 13px; padding: 4px 0; }"
+                "QLabel:hover { color: %2; }")
+            .arg(Theme::TextSecondary, Theme::TextPrimary));
+    m_historyToggle->setCursor(Qt::PointingHandCursor);
+    connect(m_historyToggle, &QLabel::linkActivated, this, [](const QString &){});
+    // 用 mousePressEvent 通过 eventFilter 太复杂，改用 QPushButton 模拟
+    auto *toggleBtn = new QPushButton("最近搜索 ▸", this);
+    toggleBtn->setFlat(true);
+    toggleBtn->setStyleSheet(
+        QString("QPushButton { background: transparent; color: %1; border: none; "
+                "text-align: left; padding: 6px 0; font-size: 13px; }"
+                "QPushButton:hover { color: %2; }")
+            .arg(Theme::TextSecondary, Theme::TextPrimary));
+    // 删除 m_historyToggle QLabel，改用按钮
+    delete m_historyToggle;
+    m_historyToggle = nullptr;
+    connect(toggleBtn, &QPushButton::clicked, this, [this, toggleBtn]() {
+        m_historyExpanded = !m_historyExpanded;
+        m_historyFilter->setVisible(m_historyExpanded);
+        m_historyList->setVisible(m_historyExpanded);
+        toggleBtn->setText(m_historyExpanded ? "最近搜索 ▾" : "最近搜索 ▸");
+    });
+    mainLayout->addWidget(toggleBtn);
 
     m_historyFilter = new QLineEdit(this);
     m_historyFilter->setPlaceholderText("搜索历史记录...");
-    m_historyFilter->setStyleSheet(
-        "QLineEdit { background: #333; color: #fff; border: 1px solid #555; "
-        "border-radius: 4px; padding: 6px; font-size: 12px; }");
+    m_historyFilter->setVisible(false);
     connect(m_historyFilter, &QLineEdit::textChanged, this, &SearchPage::refreshHistory);
-    historyLayout->addWidget(m_historyFilter);
+    mainLayout->addWidget(m_historyFilter);
 
     m_historyList = new QListWidget(this);
     m_historyList->setMaximumHeight(120);
-    m_historyList->setStyleSheet(
-        "QListWidget { background: #252525; color: #aaa; border: 1px solid #444; "
-        "border-radius: 4px; font-size: 12px; }"
-        "QListWidget::item { padding: 6px; }"
-        "QListWidget::item:hover { background: #333; }"
-        "QListWidget::item:selected { background: #0078d4; color: white; }");
+    m_historyList->setVisible(false);
     connect(m_historyList, &QListWidget::itemClicked,
             this, &SearchPage::onHistoryItemClicked);
-    historyLayout->addWidget(m_historyList);
-    mainLayout->addWidget(historyGroup);
+    mainLayout->addWidget(m_historyList);
 }
 
 // ============================================================
@@ -236,12 +275,12 @@ void SearchPage::updateBrowserStatus()
     int port = m_browser->scanCdpPort(configPort, configPort + 3);
     if (port > 0) {
         m_browserStatus->setStyleSheet(
-            "color: #4caf50; font-size: 12px;");
+            QString("color: %1; font-size: 12px;").arg(Theme::Success));
         m_browserStatus->setText(
             QString("浏览器: 已连接 (端口 %1)").arg(port));
     } else {
         m_browserStatus->setStyleSheet(
-            "color: #ff9800; font-size: 12px;");
+            QString("color: %1; font-size: 12px;").arg(Theme::Warning));
         m_browserStatus->setText("浏览器: 未检测到 CDP");
     }
 }
@@ -270,10 +309,10 @@ void SearchPage::checkConfigStatus()
         browserReady = (actualPort > 0);
     }
     if (browserReady) {
-        m_browserStatus->setStyleSheet("color: #4caf50; font-size: 12px;");
+        m_browserStatus->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::Success));
         m_browserStatus->setText(QString("浏览器: 端口 %1").arg(actualPort));
     } else {
-        m_browserStatus->setStyleSheet("color: #ff9800; font-size: 12px;");
+        m_browserStatus->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::Warning));
         m_browserStatus->setText(QString("浏览器: 未检测 (配置%d)").arg(configPort));
     }
 
@@ -300,13 +339,13 @@ void SearchPage::checkConfigStatus()
     }
 
     if (messages.isEmpty()) {
-        m_configStatus->setStyleSheet("color: #4caf50; font-size: 11px; padding: 2px 0;");
+        m_configStatus->setStyleSheet(QString("color: %1; font-size: 11px; padding: 2px 0;").arg(Theme::Success));
         m_configStatus->setText("配置: ✓ 就绪");
     } else if (hasBlocking) {
-        m_configStatus->setStyleSheet("color: #f44336; font-size: 11px; padding: 2px 0;");
+        m_configStatus->setStyleSheet(QString("color: %1; font-size: 11px; padding: 2px 0;").arg(Theme::Error));
         m_configStatus->setText("配置: " + messages.join("  "));
     } else {
-        m_configStatus->setStyleSheet("color: #ff9800; font-size: 11px; padding: 2px 0;");
+        m_configStatus->setStyleSheet(QString("color: %1; font-size: 11px; padding: 2px 0;").arg(Theme::Warning));
         m_configStatus->setText("配置: " + messages.join("  "));
     }
 }
@@ -314,7 +353,7 @@ void SearchPage::checkConfigStatus()
 void SearchPage::logWarning(const QString &msg)
 {
     m_progressLog->append(
-        QString("<span style='color:#ff9800;'>⚠ %1</span>").arg(msg));
+        QString("<span style='color:%1;'>⚠ %2</span>").arg(Theme::Warning, msg));
     m_progressLog->verticalScrollBar()->setValue(
         m_progressLog->verticalScrollBar()->maximum());
 }
@@ -322,7 +361,7 @@ void SearchPage::logWarning(const QString &msg)
 void SearchPage::logError(const QString &msg)
 {
     m_progressLog->append(
-        QString("<span style='color:#f44336;'>✗ %1</span>").arg(msg));
+        QString("<span style='color:%1;'>✗ %2</span>").arg(Theme::Error, msg));
     m_progressLog->verticalScrollBar()->setValue(
         m_progressLog->verticalScrollBar()->maximum());
 }
@@ -401,13 +440,13 @@ void SearchPage::onStartSearch()
         } else {
             // CDP 不可用 → 尝试自动启动浏览器
             m_progressLog->append(
-                "<span style='color:#ff9800;'>浏览器未就绪，正在自动启动...</span>");
+                QString("<span style='color:%1;'>浏览器未就绪，正在自动启动...</span>").arg(Theme::Warning));
             int launchedPort = m_browser->launch(configPort);
             if (launchedPort > 0) {
                 cdpPort = QString::number(launchedPort);
                 m_progressLog->append(
-                    QString("<span style='color:#81c784;'>✓ 浏览器已启动 (端口 %1)</span>")
-                        .arg(launchedPort));
+                    QString("<span style='color:%1;'>✓ 浏览器已启动 (端口 %2)</span>")
+                        .arg(Theme::Green).arg(launchedPort));
                 // 立即刷新状态标签，不等 5s 定时器
                 checkConfigStatus();
             } else {
@@ -430,9 +469,19 @@ void SearchPage::onStartSearch()
         QString("[%1] 开始搜索: %2").arg(
             QDateTime::currentDateTime().toString("hh:mm:ss"), query));
 
+    // 初始化 StageProgress
+    {
+        QString sp = m_searchPlatformLabel->text().section(": ", 1, 1);
+        QString kp = m_synthesisPlatformLabel->text().section(": ", 1, 1);
+        QVector<StageProgress::Stage> stages;
+        stages.append({"search", QString("搜索 %1").arg(sp), StageProgress::Pending, 0, 0});
+        stages.append({"synthesis", QString("整合 %1").arg(kp), StageProgress::Pending, 0, 0});
+        m_stageProgress->setStages(stages);
+    }
+
     // 状态灯：蓝色搜索中
     m_statusIndicator->setText("●");
-    m_statusIndicator->setStyleSheet("color: #0078d4; font-size: 18px;");
+    m_statusIndicator->setStyleSheet(QString("color: %1; font-size: 18px;").arg(Theme::Accent));
     m_statusIndicator->setToolTip("搜索中...");
     m_statusAnimTimer->start();
 
@@ -458,28 +507,31 @@ void SearchPage::onStageStarted(const QString &stage, const QString &question,
         QString("[%1] %2 | %3").arg(stage, question.left(60), platform));
     m_progressLog->verticalScrollBar()->setValue(
         m_progressLog->verticalScrollBar()->maximum());
+
+    // 更新 StageProgress
+    int idx = (stage == "synthesis") ? 1 : 0;
+    StageProgress::Stage s;
+    s.name = stage;
+    s.label = QString("%1 %2").arg(stage == "synthesis" ? "整合" : "搜索", platform);
+    s.state = StageProgress::Running;
+    m_stageProgress->updateStage(idx, s);
 }
 
 void SearchPage::onStageProgress(const QString &stage, const QString &platform,
                                   int elapsedSec, int contentLen)
 {
-    // 原地替换式进度：删除上一条进度行，写入新行
+    // 更新详细日志
     QTextCursor cursor = m_progressLog->textCursor();
     cursor.movePosition(QTextCursor::End);
-
-    // 如果上一行是进度行（以 "  ... " 开头），删除它
     cursor.movePosition(QTextCursor::StartOfBlock, QTextCursor::KeepAnchor);
     QString lastLine = cursor.selectedText();
     if (lastLine.contains("|") && lastLine.contains("等待平台回复")) {
         cursor.removeSelectedText();
-        // 删除前面的换行符
         cursor.deletePreviousChar();
     } else {
-        // 不是进度行，恢复光标到末尾
         cursor.movePosition(QTextCursor::End);
     }
 
-    // 构造进度动画：根据内容长度变化显示不同指示器
     QString anim;
     int phase = (elapsedSec / 2) % 4;
     if (phase == 0) anim = "|";
@@ -492,6 +544,16 @@ void SearchPage::onStageProgress(const QString &stage, const QString &platform,
             .arg(anim, stage).arg(elapsedSec).arg(contentLen));
     m_progressLog->verticalScrollBar()->setValue(
         m_progressLog->verticalScrollBar()->maximum());
+
+    // 更新 StageProgress
+    int idx = (stage == "synthesis") ? 1 : 0;
+    StageProgress::Stage s;
+    s.name = stage;
+    s.label = QString("%1 %2").arg(stage == "synthesis" ? "整合" : "搜索", platform);
+    s.state = StageProgress::Running;
+    s.elapsedSec = elapsedSec;
+    s.contentLen = contentLen;
+    m_stageProgress->updateStage(idx, s);
 }
 
 void SearchPage::onStageFinished(const QString &stage, const QString &platform,
@@ -506,6 +568,15 @@ void SearchPage::onStageFinished(const QString &stage, const QString &platform,
     }
     m_progressLog->verticalScrollBar()->setValue(
         m_progressLog->verticalScrollBar()->maximum());
+
+    // 更新 StageProgress
+    int idx = (stage == "synthesis") ? 1 : 0;
+    StageProgress::Stage s;
+    s.name = stage;
+    s.label = QString("%1 %2").arg(stage == "synthesis" ? "整合" : "搜索", platform);
+    s.state = (contentLen > 0 || stage == "synthesis") ? StageProgress::Done : StageProgress::Skipped;
+    s.contentLen = contentLen;
+    m_stageProgress->updateStage(idx, s);
 }
 
 void SearchPage::onSearchFinished(bool success, const QString &reportPath)
@@ -518,12 +589,12 @@ void SearchPage::onSearchFinished(bool success, const QString &reportPath)
         loadReport(reportPath);
         // 状态灯：绿色完成 → 2 秒后变灰
         m_statusIndicator->setText("◎");
-        m_statusIndicator->setStyleSheet("color: #81c784; font-size: 18px;");
+        m_statusIndicator->setStyleSheet(QString("color: %1; font-size: 18px;").arg(Theme::Green));
         m_statusIndicator->setToolTip("搜索完成");
         QTimer::singleShot(2000, this, [this]() {
             if (m_statusIndicator->toolTip() == "搜索完成") {
                 m_statusIndicator->setText("○");
-                m_statusIndicator->setStyleSheet("color: gray; font-size: 18px;");
+                m_statusIndicator->setStyleSheet(QString("color: %1; font-size: 18px;").arg(Theme::TextMuted));
                 m_statusIndicator->setToolTip("空闲");
             }
         });
@@ -542,9 +613,8 @@ void SearchPage::onSearchFinished(bool success, const QString &reportPath)
             "<p style='font-size:18px;'>搜索未完成</p>"
             "<p style='color:#aaa;'>请查看上方进度日志了解失败原因</p>"
             "<p style='color:#888;'>常见原因: API Key 未配置 / 浏览器未就绪 / 平台会话过期</p></div>");
-        // 状态灯：红色失败
         m_statusIndicator->setText("✕");
-        m_statusIndicator->setStyleSheet("color: #f44336; font-size: 18px;");
+        m_statusIndicator->setStyleSheet(QString("color: %1; font-size: 18px;").arg(Theme::Error));
         m_statusIndicator->setToolTip("搜索失败");
     }
     refreshHistory();
@@ -574,8 +644,8 @@ void SearchPage::onErrorOccurred(const QString &errorType, const QString &platfo
                                  const QString &detail)
 {
     m_progressLog->append(
-        QString("<span style='color:#f44336;'>✗ 错误 [%1] %2: %3</span>")
-            .arg(platform, errorType, detail));
+        QString("<span style='color:%1;'>✗ 错误 [%2] %3: %4</span>")
+            .arg(Theme::Error, platform, errorType, detail));
 
     // 致命错误同时显示在报告区
     if (errorType == "handshake_timeout" || errorType == "execution_failed"

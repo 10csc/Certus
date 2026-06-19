@@ -41,6 +41,9 @@ set(GUI_SOURCES
     src/pages/memorypage.cpp
     src/pages/repairpage.cpp
     src/ui/minibarchart.cpp
+    src/ui/theme.cpp
+    src/ui/toast.cpp
+    src/ui/stageprogress.cpp
 )
 
 set(GUI_HEADERS
@@ -51,6 +54,9 @@ set(GUI_HEADERS
     src/pages/memorypage.h
     src/pages/repairpage.h
     src/ui/minibarchart.h
+    src/ui/theme.h
+    src/ui/toast.h
+    src/ui/stageprogress.h
 )
 
 # ============================================================

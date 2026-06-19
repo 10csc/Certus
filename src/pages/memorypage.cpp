@@ -1,10 +1,13 @@
 #include "memorypage.h"
 #include "../core/database.h"
+#include "../ui/theme.h"
+#include "../ui/toast.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDialog>
 #include <QFormLayout>
 #include <QDialogButtonBox>
+#include <QLabel>
 #include <QMessageBox>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -28,21 +31,22 @@ void MemoryPage::setupUi()
     auto *header = new QHBoxLayout();
     m_searchInput = new QLineEdit(this);
     m_searchInput->setPlaceholderText("搜索知识库...");
-    m_searchInput->setStyleSheet(
-        "background:#333; color:#fff; border:1px solid #555; padding:8px;");
     auto *searchBtn = new QPushButton("搜索", this);
-    searchBtn->setStyleSheet(
-        "QPushButton{background:#0078d4;color:white;border:none;padding:8px 16px;}");
+    searchBtn->setProperty("cssClass", "primary");
     connect(searchBtn, &QPushButton::clicked, this, &MemoryPage::onSearch);
     m_semanticBtn = new QPushButton("语义搜索", this);
-    m_semanticBtn->setStyleSheet(
-        "QPushButton{background:#555;color:#ccc;border:none;padding:8px 16px;}"
-        "QPushButton:hover{background:#666;}");
+    m_semanticBtn->setProperty("cssClass", "secondary");
     m_semanticBtn->setToolTip("使用 ChromaDB 语义搜索（需要 Python 环境）");
     connect(m_semanticBtn, &QPushButton::clicked, this, &MemoryPage::onSemanticSearch);
     header->addWidget(m_searchInput, 1);
     header->addWidget(searchBtn);
     header->addWidget(m_semanticBtn);
+
+    // 条目计数
+    m_countLabel = new QLabel("共 0 条", this);
+    m_countLabel->setStyleSheet(QString("color:%1; font-size:12px; padding:0 4px;").arg(Theme::TextMuted));
+    header->addWidget(m_countLabel);
+
     layout->addLayout(header);
 
     // 操作按钮行
@@ -50,12 +54,9 @@ void MemoryPage::setupUi()
     m_addBtn = new QPushButton("新增", this);
     m_editBtn = new QPushButton("编辑", this);
     m_deleteBtn = new QPushButton("删除", this);
-    QString btnStyle =
-        "QPushButton{background:#555;color:#ccc;border:none;border-radius:3px;"
-        "padding:6px 16px;}QPushButton:hover{background:#666;}";
-    m_addBtn->setStyleSheet(btnStyle);
-    m_editBtn->setStyleSheet(btnStyle);
-    m_deleteBtn->setStyleSheet(btnStyle);
+    m_addBtn->setProperty("cssClass", "success");
+    m_editBtn->setProperty("cssClass", "secondary");
+    m_deleteBtn->setProperty("cssClass", "danger");
     connect(m_addBtn, &QPushButton::clicked, this, &MemoryPage::onAdd);
     connect(m_editBtn, &QPushButton::clicked, this, &MemoryPage::onEdit);
     connect(m_deleteBtn, &QPushButton::clicked, this, &MemoryPage::onDelete);
@@ -67,19 +68,12 @@ void MemoryPage::setupUi()
 
     // 列表
     m_list = new QListWidget(this);
-    m_list->setStyleSheet(
-        "QListWidget{background:#252525;color:#aaa;border:1px solid #444;}"
-        "QListWidget::item{padding:8px;}"
-        "QListWidget::item:hover{background:#333;}"
-        "QListWidget::item:selected{background:#0078d4;color:white;}");
     connect(m_list, &QListWidget::itemClicked, this, &MemoryPage::onItemSelected);
     layout->addWidget(m_list, 1);
 
     // 详情
     m_detailView = new QTextEdit(this);
     m_detailView->setReadOnly(true);
-    m_detailView->setStyleSheet(
-        "background:#1a1a1a; color:#ccc; border:1px solid #444; padding:8px;");
     m_detailView->setMaximumHeight(200);
     layout->addWidget(m_detailView);
 }
@@ -103,6 +97,7 @@ void MemoryPage::onSearch()
         m_list->addItem(QString("[%1] %2").arg(e.createdAt.left(10), e.topic));
         m_idCache.append(e.id);
     }
+    m_countLabel->setText(QString("共 %1 条").arg(results.size()));
 }
 
 void MemoryPage::onItemSelected(QListWidgetItem *)
@@ -142,14 +137,11 @@ void MemoryPage::onAdd()
     // 简单表单对话框
     QDialog dlg(this);
     dlg.setWindowTitle("新增知识条目");
-    dlg.setStyleSheet("background:#2c2c2c; color:#ccc;");
+    dlg.setStyleSheet(QString("background:%1; color:%2;").arg(Theme::BgTertiary, Theme::TextPrimary));
     auto *form = new QFormLayout(&dlg);
     auto *topicEdit = new QLineEdit(&dlg);
     auto *conclusionEdit = new QLineEdit(&dlg);
     auto *sourcesEdit = new QLineEdit(&dlg);
-    topicEdit->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
-    conclusionEdit->setStyleSheet(topicEdit->styleSheet());
-    sourcesEdit->setStyleSheet(topicEdit->styleSheet());
     form->addRow("主题:", topicEdit);
     form->addRow("结论:", conclusionEdit);
     form->addRow("来源:", sourcesEdit);
@@ -186,14 +178,11 @@ void MemoryPage::onEdit()
 
     QDialog dlg(this);
     dlg.setWindowTitle("编辑知识条目");
-    dlg.setStyleSheet("background:#2c2c2c; color:#ccc;");
+    dlg.setStyleSheet(QString("background:%1; color:%2;").arg(Theme::BgTertiary, Theme::TextPrimary));
     auto *form = new QFormLayout(&dlg);
     auto *topicEdit = new QLineEdit(entry.topic, &dlg);
     auto *conclusionEdit = new QLineEdit(entry.conclusion, &dlg);
     auto *sourcesEdit = new QLineEdit(entry.sources, &dlg);
-    topicEdit->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
-    conclusionEdit->setStyleSheet(topicEdit->styleSheet());
-    sourcesEdit->setStyleSheet(topicEdit->styleSheet());
     form->addRow("主题:", topicEdit);
     form->addRow("结论:", conclusionEdit);
     form->addRow("来源:", sourcesEdit);
@@ -278,9 +267,10 @@ void MemoryPage::onSemanticSearch()
     args << cliScript << "knowledge_search" << kw << "--top_k" << "20";
     m_cliProcess->start(m_pythonPath, args);
 
-    // 切换按钮样式表示语义模式
-    m_semanticBtn->setStyleSheet(
-        "QPushButton{background:#0078d4;color:white;border:none;padding:8px 16px;}");
+    m_semanticBtn->setProperty("cssClass", "primary");
+    // 强制刷新样式
+    m_semanticBtn->style()->unpolish(m_semanticBtn);
+    m_semanticBtn->style()->polish(m_semanticBtn);
 }
 
 void MemoryPage::onCliProcessFinished(int exitCode, QProcess::ExitStatus status)
@@ -292,9 +282,9 @@ void MemoryPage::onCliProcessFinished(int exitCode, QProcess::ExitStatus status)
     m_cliProcess = nullptr;
 
     if (exitCode != 0 || status == QProcess::CrashExit) {
-        m_semanticBtn->setStyleSheet(
-            "QPushButton{background:#555;color:#ccc;border:none;padding:8px 16px;}"
-            "QPushButton:hover{background:#666;}");
+        m_semanticBtn->setProperty("cssClass", "secondary");
+        m_semanticBtn->style()->unpolish(m_semanticBtn);
+        m_semanticBtn->style()->polish(m_semanticBtn);
         return;
     }
 
@@ -320,11 +310,12 @@ void MemoryPage::onCliProcessFinished(int exitCode, QProcess::ExitStatus status)
                             .arg(topic));
         m_idCache.append(sqliteId);
     }
+    m_countLabel->setText(QString("共 %1 条 (语义)").arg(results.size()));
 
     // 恢复按钮样式
-    m_semanticBtn->setStyleSheet(
-        "QPushButton{background:#555;color:#ccc;border:none;padding:8px 16px;}"
-        "QPushButton:hover{background:#666;}");
+    m_semanticBtn->setProperty("cssClass", "secondary");
+    m_semanticBtn->style()->unpolish(m_semanticBtn);
+    m_semanticBtn->style()->polish(m_semanticBtn);
 }
 
 // ============================================================

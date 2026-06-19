@@ -3,6 +3,8 @@
 #include "../utils/crypto.h"
 #include "../utils/logger.h"
 #include "../core/browsermanager.h"
+#include "../ui/theme.h"
+#include "../ui/toast.h"
 #include <QSet>
 #include <QMessageBox>
 #include <QProcess>
@@ -58,26 +60,20 @@ void ConfigPage::onLaunchBrowser()
     if (!m_browser) return;
     int port = m_cdpPort->text().toInt();
     if (port < 1 || port > 65535) {
-        QMessageBox::warning(this, "端口错误", "请输入有效的端口号 (1-65535)");
+        Toast::show("请输入有效的端口号 (1-65535)", Toast::Warning, this);
         return;
     }
     if (m_browser->isRunning()) {
-        QMessageBox::information(this, "提示", "浏览器已在运行中");
+        Toast::show("浏览器已在运行中", Toast::Info, this);
         return;
     }
     // 先持久化端口，确保 SearchPage 能读取到最新值
     if (m_db) m_db->saveConfig("cdp_port", QString::number(port));
     int result = m_browser->launch(port);
     if (result > 0) {
-        QMessageBox::information(this, "提示",
-            QString("浏览器已在端口 %1 启动\nCDP 地址: http://127.0.0.1:%1/json/version").arg(result));
+        Toast::show(QString("浏览器已在端口 %1 启动").arg(result), Toast::Success, this);
     } else {
-        QMessageBox::warning(this, "启动失败",
-            QString("浏览器 CDP 端口 %1 未就绪。\n\n"
-                    "常见原因:\n"
-                    "1. Edge/Chrome 已在运行中(无调试端口) → 请先关闭所有浏览器窗口\n"
-                    "2. 浏览器冷启动慢 → 请稍后重试\n\n"
-                    "手动启动: msedge --remote-debugging-port=%1").arg(port));
+        Toast::show(QString("浏览器 CDP 端口 %1 未就绪").arg(port), Toast::Error, this);
     }
 }
 
@@ -123,10 +119,6 @@ void ConfigPage::setupUi()
 {
     auto *layout = new QVBoxLayout(this);
     m_tabs = new QTabWidget(this);
-    m_tabs->setStyleSheet(
-        "QTabWidget::pane { border:1px solid #444; background:#1e1e1e; }"
-        "QTabBar::tab { background:#2c2c2c; color:#aaa; padding:8px 16px; }"
-        "QTabBar::tab:selected { background:#333; color:#fff; }");
 
     setupGeneralTab(m_tabs);
     setupProjectTab(m_tabs);
@@ -139,112 +131,87 @@ void ConfigPage::setupGeneralTab(QTabWidget *tabs)
 {
     auto *tab = new QWidget();
     auto *form = new QFormLayout(tab);
-    form->setSpacing(12);
+    form->setSpacing(16);
 
     auto *cdpRow = new QHBoxLayout();
     m_cdpPort = new QLineEdit("9223", this);
-    m_cdpPort->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
     cdpRow->addWidget(m_cdpPort, 1);
     auto *launchBtn = new QPushButton("启动浏览器", this);
-    launchBtn->setStyleSheet(
-        "QPushButton{background:#555;color:#ccc;border:none;"
-        "border-radius:4px;padding:6px 14px;font-size:12px;}"
-        "QPushButton:hover{background:#666;}");
     connect(launchBtn, &QPushButton::clicked, this, &ConfigPage::onLaunchBrowser);
     cdpRow->addWidget(launchBtn);
     form->addRow("CDP 端口:", cdpRow);
 
     m_apiKey = new QLineEdit(this);
     m_apiKey->setEchoMode(QLineEdit::Password);
-    m_apiKey->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
     form->addRow("DeepSeek Key:", m_apiKey);
 
     m_apiKeyStatus = new QLabel("未配置", this);
-    m_apiKeyStatus->setStyleSheet("color:#888;");
+    m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
     form->addRow("状态:", m_apiKeyStatus);
 
     m_apiUrl = new QLineEdit("https://api.deepseek.com/v1", this);
-    m_apiUrl->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
     form->addRow("API 端点:", m_apiUrl);
 
     // Claude API Key（用于辅助修复页）
     m_claudeKey = new QLineEdit(this);
     m_claudeKey->setEchoMode(QLineEdit::Password);
     m_claudeKey->setPlaceholderText("sk-ant-... (Anthropic Console 获取)");
-    m_claudeKey->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
     form->addRow("Claude Key:", m_claudeKey);
     m_claudeKeyStatus = new QLabel("未配置", this);
-    m_claudeKeyStatus->setStyleSheet("color:#888;");
+    m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
     form->addRow("", m_claudeKeyStatus);
 
     // Codex / OpenAI Key（用于辅助修复页）
     m_codexKey = new QLineEdit(this);
     m_codexKey->setEchoMode(QLineEdit::Password);
     m_codexKey->setPlaceholderText("sk-... (OpenAI Platform 获取)");
-    m_codexKey->setStyleSheet("background:#333; color:#fff; border:1px solid #555; padding:6px;");
     form->addRow("Codex Key:", m_codexKey);
     m_codexKeyStatus = new QLabel("未配置", this);
-    m_codexKeyStatus->setStyleSheet("color:#888;");
+    m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
     form->addRow("", m_codexKeyStatus);
 
     m_defaultSearchPlatform = new QComboBox(this);
     m_defaultSearchPlatform->addItems({"deepseek", "kimi", "chatgpt", "gemini"});
-    m_defaultSearchPlatform->setStyleSheet(
-        "QComboBox { background: #333; color: #fff; border: 1px solid #555; padding: 4px; }");
     form->addRow("默认搜索平台:", m_defaultSearchPlatform);
 
     m_defaultSynthesisPlatform = new QComboBox(this);
     m_defaultSynthesisPlatform->addItems({"kimi", "deepseek", "chatgpt", "gemini"});
-    m_defaultSynthesisPlatform->setStyleSheet(
-        "QComboBox { background: #333; color: #fff; border: 1px solid #555; padding: 4px; }");
     form->addRow("默认整合平台:", m_defaultSynthesisPlatform);
 
     auto *saveBtn = new QPushButton("保存配置", this);
-    saveBtn->setStyleSheet("QPushButton{background:#0078d4;color:white;border:none;"
-                           "border-radius:4px;padding:8px 20px;}");
+    saveBtn->setProperty("cssClass", "primary");
     connect(saveBtn, &QPushButton::clicked, this, &ConfigPage::onSaveConfig);
     form->addRow("", saveBtn);
 
     // 自动分析深度
     m_autoDepth = new QCheckBox("自动分析问题等级 (开启后系统自动判断 L2/L3)", this);
-    m_autoDepth->setStyleSheet("color:#ccc;");
     m_autoDepth->setChecked(true);
     form->addRow("", m_autoDepth);
 
     // 自动启动浏览器
     m_autoLaunchBrowser = new QCheckBox("启动程序时自动启动浏览器", this);
-    m_autoLaunchBrowser->setStyleSheet("color:#ccc;");
     form->addRow("", m_autoLaunchBrowser);
 
     // 环境自举
     auto *envBtn = new QPushButton("自动检测环境", this);
-    envBtn->setStyleSheet(
-        "QPushButton{background:#555;color:#ccc;border:none;"
-        "border-radius:4px;padding:8px 20px;}"
-        "QPushButton:hover{background:#666;}");
     connect(envBtn, &QPushButton::clicked, this, &ConfigPage::onDetectEnvironment);
     form->addRow("环境自举:", envBtn);
 
     m_envStatus = new QLabel("点击「自动检测环境」检查系统就绪状态", this);
-    m_envStatus->setStyleSheet("color:#888; font-size:11px; padding:4px 0;");
+    m_envStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::TextMuted));
     m_envStatus->setWordWrap(true);
     form->addRow("", m_envStatus);
 
     // 日志级别
     m_logLevelCombo = new QComboBox(this);
     m_logLevelCombo->addItems({"ERROR", "WARNING", "INFO", "DEBUG"});
-    m_logLevelCombo->setCurrentIndex(2);  // 默认 INFO
-    m_logLevelCombo->setStyleSheet(
-        "QComboBox { background: #333; color: #fff; border: 1px solid #555; padding: 4px; }");
+    m_logLevelCombo->setCurrentIndex(2);
     connect(m_logLevelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ConfigPage::onLogLevelChanged);
     form->addRow("日志级别:", m_logLevelCombo);
 
     // === 平台健康面板 ===
     auto *healthGroup = new QGroupBox("平台状态", this);
-    healthGroup->setStyleSheet(
-        "QGroupBox { color: #aaa; border: 1px solid #444; border-radius: 4px; "
-        "padding-top: 10px; margin-top: 8px; }");
     auto *healthLayout = new QFormLayout(healthGroup);
     healthLayout->setSpacing(4);
 
@@ -252,7 +219,7 @@ void ConfigPage::setupGeneralTab(QTabWidget *tabs)
     QLabel **hLabels[] = {&m_healthDp, &m_healthKi, &m_healthCg, &m_healthGm};
     for (int i = 0; i < 4; i++) {
         *hLabels[i] = new QLabel("检测中...", this);
-        (*hLabels[i])->setStyleSheet("color: #888; font-size: 12px;");
+        (*hLabels[i])->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextMuted));
         healthLayout->addRow(QString("%1:").arg(hNames[i]), *hLabels[i]);
     }
 
@@ -275,18 +242,15 @@ void ConfigPage::setupProjectTab(QTabWidget *tabs)
     auto *layout = new QVBoxLayout(tab);
 
     m_currentProjectLabel = new QLabel("当前项目: (未设置)", this);
-    m_currentProjectLabel->setStyleSheet("color:#4fc3f7; padding:4px;");
+    m_currentProjectLabel->setStyleSheet(QString("color:%1; padding:4px;").arg(Theme::Info));
     layout->addWidget(m_currentProjectLabel);
 
     // 新增行
     auto *row = new QHBoxLayout();
     m_newProjectName = new QLineEdit(this);
     m_newProjectName->setPlaceholderText("输入新项目名称...");
-    m_newProjectName->setStyleSheet(
-        "background:#333; color:#fff; border:1px solid #555; padding:6px;");
     auto *addBtn = new QPushButton("新增", this);
-    addBtn->setStyleSheet(
-        "QPushButton{background:#0078d4;color:white;border:none;padding:6px 16px;}");
+    addBtn->setProperty("cssClass", "primary");
     connect(addBtn, &QPushButton::clicked, this, &ConfigPage::onAddProject);
     row->addWidget(m_newProjectName, 1);
     row->addWidget(addBtn);
@@ -294,11 +258,6 @@ void ConfigPage::setupProjectTab(QTabWidget *tabs)
 
     // 项目列表
     m_projectList = new QListWidget(this);
-    m_projectList->setStyleSheet(
-        "QListWidget{background:#252525;color:#aaa;border:1px solid #444;}"
-        "QListWidget::item{padding:6px;}"
-        "QListWidget::item:hover{background:#333;}"
-        "QListWidget::item:selected{background:#0078d4;color:white;}");
     m_projectList->setMaximumHeight(120);
     connect(m_projectList, &QListWidget::itemClicked,
             this, &ConfigPage::onProjectSelected);
@@ -308,11 +267,7 @@ void ConfigPage::setupProjectTab(QTabWidget *tabs)
     auto *btnRow = new QHBoxLayout();
     auto *delBtn = new QPushButton("删除选中", this);
     auto *setCurBtn = new QPushButton("设为当前", this);
-    QString btnStyle =
-        "QPushButton{background:#555;color:#ccc;border:none;padding:6px 16px;}"
-        "QPushButton:hover{background:#666;}";
-    delBtn->setStyleSheet(btnStyle);
-    setCurBtn->setStyleSheet(btnStyle);
+    delBtn->setProperty("cssClass", "danger");
     connect(delBtn, &QPushButton::clicked, this, &ConfigPage::onDeleteProject);
     connect(setCurBtn, &QPushButton::clicked, this, &ConfigPage::onSetCurrentProject);
     btnRow->addWidget(delBtn);
@@ -325,7 +280,7 @@ void ConfigPage::setupProjectTab(QTabWidget *tabs)
     auto *sessLayout = new QVBoxLayout(m_sessionUrlArea);
     sessLayout->setContentsMargins(0, 8, 0, 0);
     auto *sessTitle = new QLabel("选中项目后编辑各平台会话链接:", this);
-    sessTitle->setStyleSheet("color:#aaa; font-size:11px;");
+    sessTitle->setStyleSheet(QString("color:%1; font-size:11px;").arg(Theme::TextMuted));
     sessLayout->addWidget(sessTitle);
     auto *sessForm = new QFormLayout();
     sessForm->setSpacing(6);
@@ -345,10 +300,7 @@ void ConfigPage::setupPlatformTab(QTabWidget *tabs)
     // 操作按钮行
     auto *btnRow = new QHBoxLayout();
     auto *addPlatBtn = new QPushButton("+ 新增平台", this);
-    addPlatBtn->setStyleSheet(
-        "QPushButton{background:#388e3c;color:white;border:none;"
-        "border-radius:4px;padding:6px 14px;font-size:12px;}"
-        "QPushButton:hover{background:#43a047;}");
+    addPlatBtn->setProperty("cssClass", "success");
     connect(addPlatBtn, &QPushButton::clicked, this, [this]() {
         int row = m_platformTable->rowCount();
         m_platformTable->insertRow(row);
@@ -359,10 +311,7 @@ void ConfigPage::setupPlatformTab(QTabWidget *tabs)
     btnRow->addWidget(addPlatBtn);
 
     auto *delPlatBtn = new QPushButton("− 删除选中", this);
-    delPlatBtn->setStyleSheet(
-        "QPushButton{background:#c62828;color:white;border:none;"
-        "border-radius:4px;padding:6px 14px;font-size:12px;}"
-        "QPushButton:hover{background:#d32f2f;}");
+    delPlatBtn->setProperty("cssClass", "danger");
     connect(delPlatBtn, &QPushButton::clicked, this, [this]() {
         int row = m_platformTable->currentRow();
         if (row >= 0) {
@@ -375,7 +324,7 @@ void ConfigPage::setupPlatformTab(QTabWidget *tabs)
                 refreshTypingDropdown();
             }
         } else {
-            QMessageBox::information(this, "提示", "请先选中要删除的平台行");
+            Toast::show("请先选中要删除的平台行", Toast::Info, this);
         }
     });
     btnRow->addWidget(delPlatBtn);
@@ -385,20 +334,12 @@ void ConfigPage::setupPlatformTab(QTabWidget *tabs)
     // 平台表格
     m_platformTable = new QTableWidget(0, 2, this);
     m_platformTable->setHorizontalHeaderLabels({"平台名称", "平台URL"});
-    m_platformTable->setStyleSheet(
-        "QTableWidget { background:#1e1e1e; color:#ccc; gridline-color:#444; "
-        "border:1px solid #444; }"
-        "QHeaderView::section { background:#333; color:#ccc; padding:6px; "
-        "border:1px solid #444; }"
-        "QTableWidget::item { padding:4px; }");
     m_platformTable->horizontalHeader()->setStretchLastSection(true);
     m_platformTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     layout->addWidget(m_platformTable, 1);
 
     auto *saveBtn = new QPushButton("保存平台配置", this);
-    saveBtn->setStyleSheet(
-        "QPushButton{background:#0078d4;color:white;border:none;"
-        "border-radius:4px;padding:8px 20px;}");
+    saveBtn->setProperty("cssClass", "primary");
     connect(saveBtn, &QPushButton::clicked, this, [this]() {
         onSavePlatforms();
         refreshTypingDropdown();
@@ -407,35 +348,23 @@ void ConfigPage::setupPlatformTab(QTabWidget *tabs)
 
     // 平台定型区
     auto *typingGroup = new QGroupBox("平台定型", this);
-    typingGroup->setStyleSheet(
-        "QGroupBox { color:#ccc; border:1px solid #444; border-radius:4px; "
-        "margin-top:12px; padding-top:16px; }"
-        "QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 4px; }");
     auto *typingForm = new QFormLayout(typingGroup);
     m_typingPlatform = new QComboBox(this);
-    m_typingPlatform->setStyleSheet(
-        "QComboBox{background:#333;color:#fff;border:1px solid #555;padding:4px;}");
     typingForm->addRow("目标平台:", m_typingPlatform);
 
     m_typingText = new QCheckBox("文字收发定型", this);
-    m_typingText->setStyleSheet("color:#ccc;");
     m_typingText->setChecked(true);
     typingForm->addRow("", m_typingText);
     m_typingFile = new QCheckBox("文件上传定型", this);
-    m_typingFile->setStyleSheet("color:#ccc;");
     typingForm->addRow("", m_typingFile);
 
     m_typingBtn = new QPushButton("开始定型", this);
-    m_typingBtn->setStyleSheet(
-        "QPushButton{background:#0078d4;color:white;border:none;"
-        "border-radius:4px;padding:8px 20px;}"
-        "QPushButton:hover{background:#0086f0;}"
-        "QPushButton:disabled{background:#444;color:#888;}");
+    m_typingBtn->setProperty("cssClass", "primary");
     connect(m_typingBtn, &QPushButton::clicked, this, &ConfigPage::onStartTyping);
     typingForm->addRow("", m_typingBtn);
 
     m_typingStatus = new QLabel("未定型", this);
-    m_typingStatus->setStyleSheet("color:#888; font-size:11px; padding:4px 0;");
+    m_typingStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::TextMuted));
     typingForm->addRow("状态:", m_typingStatus);
     layout->addWidget(typingGroup);
 
@@ -500,8 +429,6 @@ void ConfigPage::onProjectSelected(QListWidgetItem *item)
         QString currentUrl = projSessions[platName].toString();
         auto *edit = new QLineEdit(currentUrl, m_sessionUrlArea);
         edit->setPlaceholderText(QString("输入 %1 的聊天链接...").arg(platName));
-        edit->setStyleSheet(
-            "background:#333; color:#fff; border:1px solid #555; padding:4px; font-size:11px;");
         m_sessionEdits[platName] = edit;
         if (form)
             form->addRow(QString("%1:").arg(platName), edit);
@@ -510,9 +437,7 @@ void ConfigPage::onProjectSelected(QListWidgetItem *item)
     // 添加保存按钮
     if (form && !m_sessionEdits.isEmpty()) {
         auto *saveBtn = new QPushButton("保存会话链接", m_sessionUrlArea);
-        saveBtn->setStyleSheet(
-            "QPushButton{background:#0078d4;color:white;border:none;"
-            "border-radius:3px;padding:4px 12px;font-size:11px;}");
+        saveBtn->setProperty("cssClass", "primary");
         connect(saveBtn, &QPushButton::clicked, this, &ConfigPage::onSaveSessionUrls);
         form->addRow("", saveBtn);
     }
@@ -543,7 +468,7 @@ void ConfigPage::onSaveSessionUrls()
         QJsonDocument sdoc(sessions);
         m_db->saveConfig("sessions", QString::fromUtf8(sdoc.toJson()));
     }
-    QMessageBox::information(this, "提示", QString("项目「%1」的会话链接已保存").arg(project));
+    Toast::show(QString("项目「%1」的会话链接已保存").arg(project), Toast::Success, this);
 }
 
 void ConfigPage::onAddProject()
@@ -553,7 +478,7 @@ void ConfigPage::onAddProject()
 
     QJsonObject sessions = m_configJson["sessions"].toObject();
     if (sessions.contains(name)) {
-        QMessageBox::information(this, "提示", "项目已存在");
+        Toast::show("项目已存在", Toast::Warning, this);
         return;
     }
     sessions[name] = QJsonObject{};
@@ -623,7 +548,7 @@ void ConfigPage::onSavePlatforms()
         QJsonDocument doc(urls);
         m_db->saveConfig("platform_urls", QString::fromUtf8(doc.toJson()));
     }
-    QMessageBox::information(this, "提示", "平台配置已保存");
+    Toast::show("平台配置已保存", Toast::Success, this);
 }
 
 // ============================================================
@@ -670,7 +595,7 @@ void ConfigPage::onSaveConfig()
             m_db->saveConfig("deepseek_key", encrypted);
             m_db->saveConfig("deepseek_key_hash", Crypto::sha256Prefix8(apiKey));
             m_apiKeyStatus->setText("已加密存储 ✓");
-            m_apiKeyStatus->setStyleSheet("color:#4caf50;");
+            m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::Success));
             m_apiKey->clear();
         }
     }
@@ -683,7 +608,7 @@ void ConfigPage::onSaveConfig()
             m_db->saveConfig("claude_key", encrypted);
             m_db->saveConfig("claude_key_hash", Crypto::sha256Prefix8(claudeKey));
             m_claudeKeyStatus->setText("已加密存储 ✓");
-            m_claudeKeyStatus->setStyleSheet("color:#4caf50;");
+            m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::Success));
             m_claudeKey->clear();
         }
     }
@@ -696,26 +621,27 @@ void ConfigPage::onSaveConfig()
             m_db->saveConfig("codex_key", encrypted);
             m_db->saveConfig("codex_key_hash", Crypto::sha256Prefix8(codexKey));
             m_codexKeyStatus->setText("已加密存储 ✓");
-            m_codexKeyStatus->setStyleSheet("color:#4caf50;");
+            m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::Success));
             m_codexKey->clear();
         }
     }
 
     // 反馈
-    m_apiKeyStatus->setStyleSheet("color:#4caf50; font-weight:bold;");
+    m_apiKeyStatus->setStyleSheet(QString("color:%1; font-weight:bold;").arg(Theme::Success));
     m_apiKeyStatus->setText("配置已保存 ✓");
+    Toast::show("配置已保存", Toast::Success, this);
     QTimer::singleShot(3000, this, [this]() {
         QString hash = m_db ? m_db->loadConfig("deepseek_key_hash") : QString();
         m_apiKeyStatus->setText(hash.isEmpty() ? "未配置" : "已配置 ✓");
-        m_apiKeyStatus->setStyleSheet(hash.isEmpty() ? "color:#888;" : "color:#4caf50;");
+        m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(hash.isEmpty() ? Theme::TextMuted : Theme::Success));
 
         QString claudeHash = m_db ? m_db->loadConfig("claude_key_hash") : QString();
         m_claudeKeyStatus->setText(claudeHash.isEmpty() ? "未配置" : "已配置 ✓");
-        m_claudeKeyStatus->setStyleSheet(claudeHash.isEmpty() ? "color:#888;" : "color:#4caf50;");
+        m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(claudeHash.isEmpty() ? Theme::TextMuted : Theme::Success));
 
         QString codexHash = m_db ? m_db->loadConfig("codex_key_hash") : QString();
         m_codexKeyStatus->setText(codexHash.isEmpty() ? "未配置" : "已配置 ✓");
-        m_codexKeyStatus->setStyleSheet(codexHash.isEmpty() ? "color:#888;" : "color:#4caf50;");
+        m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(codexHash.isEmpty() ? Theme::TextMuted : Theme::Success));
     });
 }
 
@@ -740,15 +666,15 @@ void ConfigPage::onLoadConfig()
 
     QString hash = m_db->loadConfig("deepseek_key_hash");
     m_apiKeyStatus->setText(hash.isEmpty() ? "未配置" : "已配置 ✓");
-    m_apiKeyStatus->setStyleSheet(hash.isEmpty() ? "color:#888;" : "color:#4caf50;");
+    m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(hash.isEmpty() ? Theme::TextMuted : Theme::Success));
 
     QString claudeHash = m_db->loadConfig("claude_key_hash");
     m_claudeKeyStatus->setText(claudeHash.isEmpty() ? "未配置" : "已配置 ✓");
-    m_claudeKeyStatus->setStyleSheet(claudeHash.isEmpty() ? "color:#888;" : "color:#4caf50;");
+    m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(claudeHash.isEmpty() ? Theme::TextMuted : Theme::Success));
 
     QString codexHash = m_db->loadConfig("codex_key_hash");
     m_codexKeyStatus->setText(codexHash.isEmpty() ? "未配置" : "已配置 ✓");
-    m_codexKeyStatus->setStyleSheet(codexHash.isEmpty() ? "color:#888;" : "color:#4caf50;");
+    m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(codexHash.isEmpty() ? Theme::TextMuted : Theme::Success));
 }
 
 // ============================================================
@@ -760,7 +686,7 @@ void ConfigPage::onDetectEnvironment()
     if (!m_db) return;
 
     // 更新状态标签
-    m_envStatus->setStyleSheet("color:#4fc3f7; font-size:11px; padding:4px 0;");
+    m_envStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Info));
     m_envStatus->setText("● 检测中...");
 
     // 强制刷新 UI
@@ -861,21 +787,22 @@ void ConfigPage::onDetectEnvironment()
     QStringList allLines;
     allLines << okLines << warnLines << errLines;
     QString html = allLines.join("<br>");
-    html.replace("✓", "<span style='color:#81c784;'>✓</span>");
-    html.replace("✗", "<span style='color:#f44336;'>✗</span>");
-    html.replace("△", "<span style='color:#ff9800;'>△</span>");
+    html.replace("✓", QString("<span style='color:%1;'>✓</span>").arg(Theme::Green));
+    html.replace("✗", QString("<span style='color:%1;'>✗</span>").arg(Theme::Error));
+    html.replace("△", QString("<span style='color:%1;'>△</span>").arg(Theme::Warning));
 
     // 整体状态
     bool allOk = errLines.isEmpty() && warnLines.isEmpty();
-    QString overall = allOk ? "<span style='color:#81c784;'>● 环境就绪</span>"
-                            : (errLines.isEmpty()
-                               ? "<span style='color:#ff9800;'>● 环境基本可用 (部分警告)</span>"
-                               : "<span style='color:#f44336;'>● 环境不可用 (需修复错误)</span>");
+    QString overall = allOk
+        ? QString("<span style='color:%1;'>● 环境就绪</span>").arg(Theme::Green)
+        : (errLines.isEmpty()
+           ? QString("<span style='color:%1;'>● 环境基本可用 (部分警告)</span>").arg(Theme::Warning)
+           : QString("<span style='color:%1;'>● 环境不可用 (需修复错误)</span>").arg(Theme::Error));
     m_envStatus->setText(overall + "<br>" + html);
 
-    // 仍然显示弹窗供复制
-    QString plain = (okLines + warnLines + errLines).join("\n");
-    QMessageBox::information(this, "环境检测结果", plain.isEmpty() ? "一切正常" : plain);
+    // Toast 通知检测结果
+    Toast::show(allOk ? "环境检测通过" : "环境检测完成 (有问题)",
+                allOk ? Toast::Success : Toast::Warning, this);
 }
 
 // ============================================================
@@ -889,7 +816,7 @@ void ConfigPage::onStartTyping()
     if (m_typingText->isChecked()) targets.append("文字收发");
     if (m_typingFile->isChecked()) targets.append("文件上传");
     if (targets.isEmpty()) {
-        QMessageBox::warning(this, "定型", "请至少选择一个定型目标");
+        Toast::show("请至少选择一个定型目标", Toast::Warning, this);
         return;
     }
 
@@ -908,8 +835,7 @@ void ConfigPage::onStartTyping()
 
     // 检查浏览器是否在运行
     if (!m_browser || !m_browser->isCdpAvailable(cdpPort)) {
-        QMessageBox::warning(this, "定型",
-            QString("浏览器未就绪 (端口 %1)。\n请先在「常规配置」中启动浏览器。").arg(cdpPort));
+        Toast::show(QString("浏览器未就绪 (端口 %1)，请先启动").arg(cdpPort), Toast::Warning, this);
         return;
     }
 
@@ -938,7 +864,7 @@ void ConfigPage::onStartTyping()
     m_typingBtn->setEnabled(false);
     m_typingBtn->setText("定型中...");
     m_typingStatus->setText(QString("● 正在定型 %1 ...").arg(plat));
-    m_typingStatus->setStyleSheet("color:#4fc3f7; font-size:11px; padding:4px 0;");
+    m_typingStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Info));
 
     // 完成处理
     connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
@@ -950,7 +876,7 @@ void ConfigPage::onStartTyping()
         if (exitCode == 0) {
             m_typingStatus->setText(QString("✓ %1 定型成功").arg(plat));
             m_typingStatus->setStyleSheet(
-                "color:#81c784; font-size:11px; font-weight:bold; padding:4px 0;");
+                QString("color:%1; font-size:11px; font-weight:bold; padding:4px 0;").arg(Theme::Green));
             // 刷新定型下拉框
             refreshTypingDropdown();
         } else {
@@ -960,7 +886,7 @@ void ConfigPage::onStartTyping()
                 : errOutput.left(120);
             m_typingStatus->setText(QString("✗ %1 定型失败: %2").arg(plat, detail));
             m_typingStatus->setStyleSheet(
-                "color:#f44336; font-size:11px; padding:4px 0;");
+                QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Error));
         }
     });
 
@@ -1005,10 +931,10 @@ void ConfigPage::refreshPlatformHealth()
             status = QString("● 可达 | 平均 %1s")
                          .arg(avgElapsed > 0 ? QString::number(avgElapsed, 'f', 1)
                                             : QString("--"));
-            labels[i]->setStyleSheet("color: #81c784; font-size: 12px;");
+            labels[i]->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::Green));
         } else {
             status = "○ CDP 未连接";
-            labels[i]->setStyleSheet("color: #888; font-size: 12px;");
+            labels[i]->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextMuted));
         }
         labels[i]->setText(QString("%1: %2").arg(platforms[i], status));
     }
