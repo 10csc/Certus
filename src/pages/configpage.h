@@ -59,6 +59,7 @@ private:
     QComboBox *m_defaultSynthesisPlatform = nullptr;
     QCheckBox *m_autoDepth = nullptr;
     QCheckBox *m_autoLaunchBrowser = nullptr;
+    QLabel *m_envStatus = nullptr;
 
     // 项目管理
     QListWidget *m_projectList = nullptr;
@@ -72,6 +73,8 @@ private:
     QComboBox *m_typingPlatform = nullptr;
     QCheckBox *m_typingText = nullptr;
     QCheckBox *m_typingFile = nullptr;
+    QPushButton *m_typingBtn = nullptr;
+    QLabel *m_typingStatus = nullptr;
 
     // 平台健康
     QLabel *m_healthDp = nullptr;     // deepseek

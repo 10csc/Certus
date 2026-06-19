@@ -26,11 +26,10 @@ def get_store():
         from .store import CacheStore
         from .config import CHROMA_DIR_NAME
 
-        # 从 runtime_paths 获取 MEMORY_DIR
+        # 复用 runtime_paths 常量，避免手动推导路径
+        from runtime_paths import MEMORY_DIR
         import os
-        agent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        memory_dir = os.path.join(os.path.dirname(agent_dir), "data", "memory")
-        chroma_dir = os.path.join(memory_dir, CHROMA_DIR_NAME)
+        chroma_dir = os.path.join(MEMORY_DIR, CHROMA_DIR_NAME)
         os.makedirs(chroma_dir, exist_ok=True)
 
         _store_instance = CacheStore(persist_dir=chroma_dir)

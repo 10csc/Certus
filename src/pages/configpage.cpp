@@ -14,6 +14,8 @@
 #include <QHBoxLayout>
 #include <QFile>
 #include <QDir>
+#include <QFileInfo>
+#include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -223,6 +225,11 @@ void ConfigPage::setupGeneralTab(QTabWidget *tabs)
     connect(envBtn, &QPushButton::clicked, this, &ConfigPage::onDetectEnvironment);
     form->addRow("环境自举:", envBtn);
 
+    m_envStatus = new QLabel("点击「自动检测环境」检查系统就绪状态", this);
+    m_envStatus->setStyleSheet("color:#888; font-size:11px; padding:4px 0;");
+    m_envStatus->setWordWrap(true);
+    form->addRow("", m_envStatus);
+
     // 日志级别
     m_logLevelCombo = new QComboBox(this);
     m_logLevelCombo->addItems({"ERROR", "WARNING", "INFO", "DEBUG"});
@@ -418,13 +425,18 @@ void ConfigPage::setupPlatformTab(QTabWidget *tabs)
     m_typingFile->setStyleSheet("color:#ccc;");
     typingForm->addRow("", m_typingFile);
 
-    auto *typingBtn = new QPushButton("开始定型", this);
-    typingBtn->setStyleSheet(
+    m_typingBtn = new QPushButton("开始定型", this);
+    m_typingBtn->setStyleSheet(
         "QPushButton{background:#0078d4;color:white;border:none;"
         "border-radius:4px;padding:8px 20px;}"
-        "QPushButton:hover{background:#0086f0;}");
-    connect(typingBtn, &QPushButton::clicked, this, &ConfigPage::onStartTyping);
-    typingForm->addRow("", typingBtn);
+        "QPushButton:hover{background:#0086f0;}"
+        "QPushButton:disabled{background:#444;color:#888;}");
+    connect(m_typingBtn, &QPushButton::clicked, this, &ConfigPage::onStartTyping);
+    typingForm->addRow("", m_typingBtn);
+
+    m_typingStatus = new QLabel("未定型", this);
+    m_typingStatus->setStyleSheet("color:#888; font-size:11px; padding:4px 0;");
+    typingForm->addRow("状态:", m_typingStatus);
     layout->addWidget(typingGroup);
 
     tabs->addTab(tab, "平台注册");
@@ -747,45 +759,123 @@ void ConfigPage::onDetectEnvironment()
 {
     if (!m_db) return;
 
-    QStringList found;
-    // 检测 Python
+    // 更新状态标签
+    m_envStatus->setStyleSheet("color:#4fc3f7; font-size:11px; padding:4px 0;");
+    m_envStatus->setText("● 检测中...");
+
+    // 强制刷新 UI
+    QCoreApplication::processEvents();
+
+    QStringList okLines;
+    QStringList warnLines;
+    QStringList errLines;
+
+    // 1. 检测 Python
     QStringList pythonCandidates = {
         "D:/python_all/Python312/python.exe",
         "C:/Python312/python.exe",
         "C:/Python311/python.exe",
         "python",
     };
+    QString pythonPath;
     for (const auto &py : pythonCandidates) {
         QProcess proc;
         proc.start(py, {"--version"});
         if (proc.waitForFinished(3000) && proc.exitCode() == 0) {
             QString ver = QString::fromUtf8(proc.readAllStandardOutput()).trimmed();
             m_db->saveConfig("python_path", py);
-            found.append(QString("Python: %1 → %2").arg(py, ver));
+            pythonPath = py;
+            okLines.append(QString("✓ Python: %1").arg(ver));
             break;
         }
     }
+    if (pythonPath.isEmpty())
+        errLines.append("✗ Python: 未找到 (请安装 Python 3.12+)");
 
-    // 检测 Edge/Chrome
+    // 2. 检测 Playwright
+    if (!pythonPath.isEmpty()) {
+        QProcess pwProc;
+        pwProc.start(pythonPath, {"-c", "import playwright; print(playwright.__file__)"});
+        if (pwProc.waitForFinished(5000) && pwProc.exitCode() == 0)
+            okLines.append("✓ Playwright: 已安装");
+        else
+            warnLines.append("△ Playwright: 未安装 (运行 pip install playwright 后重试)");
+    }
+
+    // 3. 检测浏览器
     QString browserPath = BrowserManager::findBrowserPath(BrowserManager::Edge);
     if (browserPath.isEmpty())
         browserPath = BrowserManager::findBrowserPath(BrowserManager::Chrome);
-    if (!browserPath.isEmpty()) {
-        found.append(QString("浏览器: %1").arg(browserPath));
+    if (!browserPath.isEmpty())
+        okLines.append(QString("✓ 浏览器: %1").arg(
+            QFileInfo(browserPath).baseName()));
+    else
+        warnLines.append("△ 浏览器: 未找到 Edge/Chrome");
+
+    // 4. 扫描 CDP 端口
+    if (m_browser) {
+        int port = m_browser->scanCdpPort(9223, 9226);
+        if (port > 0) {
+            okLines.append(QString("✓ CDP 端口: %1").arg(port));
+            m_cdpPort->setText(QString::number(port));
+        } else {
+            warnLines.append(QString("△ CDP: 端口 %1 无响应 (请启动浏览器)").arg(9223));
+        }
     }
 
-    // 扫描 CDP 端口
-    BrowserManager bm;
-    int port = bm.scanCdpPort(9223, 9226);
-    if (port > 0) {
-        found.append(QString("CDP 端口: %1 (已检测到)").arg(port));
-        m_cdpPort->setText(QString::number(port));
+    // 5. 检查 API Key
+    QString encryptedKey = m_db->loadConfig("deepseek_key", "");
+    if (!encryptedKey.isEmpty()) {
+        QString decrypted = Crypto::decrypt(encryptedKey);
+        if (!decrypted.isEmpty())
+            okLines.append("✓ DeepSeek API Key: 已配置");
+        else
+            warnLines.append("△ API Key 解密失败");
     } else {
-        found.append("CDP: 未检测到 (需手动启动 Edge --remote-debugging-port=N)");
+        warnLines.append("△ DeepSeek API Key: 未配置 (本地总结功能受限)");
     }
 
-    QString result = found.isEmpty() ? "未检测到任何可用环境" : found.join("\n");
-    QMessageBox::information(this, "环境检测结果", result);
+    // 6. 平台 URL 完整性
+    QJsonObject urls = m_configJson["platform_urls"].toObject();
+    if (urls.isEmpty())
+        warnLines.append("△ 平台 URL: 未注册任何平台");
+    else
+        okLines.append(QString("✓ 平台 URL: 已注册 %1 个平台").arg(urls.size()));
+
+    // 7. 会话链接
+    QString currentProject = m_db->loadConfig("current_project", "");
+    if (currentProject.isEmpty()) {
+        warnLines.append("△ 当前项目: 未设置");
+    } else {
+        QString sessionsJson = m_db->loadConfig("sessions", "{}");
+        QJsonObject sessions = QJsonDocument::fromJson(sessionsJson.toUtf8()).object();
+        QJsonObject projSessions = sessions[currentProject].toObject();
+        if (projSessions.isEmpty())
+            warnLines.append(QString("△ 项目「%1」无会话链接").arg(currentProject));
+        else
+            okLines.append(QString("✓ 项目「%1」: %2 个会话链接").arg(
+                currentProject).arg(projSessions.size()));
+    }
+
+    // 汇总显示
+    QStringList allLines;
+    allLines << okLines << warnLines << errLines;
+    QString html = allLines.join("<br>");
+    html.replace("✓", "<span style='color:#81c784;'>✓</span>");
+    html.replace("✗", "<span style='color:#f44336;'>✗</span>");
+    html.replace("△", "<span style='color:#ff9800;'>△</span>");
+
+    // 整体状态
+    bool allOk = errLines.isEmpty() && warnLines.isEmpty();
+    QString overall = allOk ? "<span style='color:#81c784;'>● 环境就绪</span>"
+                            : (errLines.isEmpty()
+                               ? "<span style='color:#ff9800;'>● 环境基本可用 (部分警告)</span>"
+                               : "<span style='color:#f44336;'>● 环境不可用 (需修复错误)</span>");
+    m_envStatus->setText(overall + "<br>" + html);
+
+    // 仍然显示弹窗供复制
+    QString plain = (okLines + warnLines + errLines).join("\n");
+    QMessageBox::information(this, "环境检测结果", plain.isEmpty() ? "一切正常" : plain);
 }
 
 // ============================================================
@@ -844,12 +934,36 @@ void ConfigPage::onStartTyping()
     proc->setProcessEnvironment(env);
     proc->setWorkingDirectory(agentDir);
 
-    QMessageBox::information(this, "定型",
-        QString("定型已启动 (后台运行)\n平台: %1\n\n完成后交互脚本将更新到:\nagent/platforms/%1.py").arg(plat));
+    // UI 状态更新：定型中
+    m_typingBtn->setEnabled(false);
+    m_typingBtn->setText("定型中...");
+    m_typingStatus->setText(QString("● 正在定型 %1 ...").arg(plat));
+    m_typingStatus->setStyleSheet("color:#4fc3f7; font-size:11px; padding:4px 0;");
 
-    // 后台运行
+    // 完成处理
     connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            proc, &QProcess::deleteLater);
+            this, [this, plat, proc](int exitCode, QProcess::ExitStatus) {
+        proc->deleteLater();
+        m_typingBtn->setEnabled(true);
+        m_typingBtn->setText("开始定型");
+
+        if (exitCode == 0) {
+            m_typingStatus->setText(QString("✓ %1 定型成功").arg(plat));
+            m_typingStatus->setStyleSheet(
+                "color:#81c784; font-size:11px; font-weight:bold; padding:4px 0;");
+            // 刷新定型下拉框
+            refreshTypingDropdown();
+        } else {
+            QString errOutput = QString::fromUtf8(proc->readAllStandardError());
+            QString detail = errOutput.isEmpty()
+                ? QString("退出码 %1").arg(exitCode)
+                : errOutput.left(120);
+            m_typingStatus->setText(QString("✗ %1 定型失败: %2").arg(plat, detail));
+            m_typingStatus->setStyleSheet(
+                "color:#f44336; font-size:11px; padding:4px 0;");
+        }
+    });
+
     connect(proc, &QProcess::readyReadStandardOutput, this, [proc]() {
         qInfo().noquote() << "[Typing]" << proc->readAllStandardOutput().trimmed();
     });
