@@ -74,6 +74,48 @@ QList<AgentManager::ConfigIssue> AgentManager::validateConfig() const
         if (!QFile::exists(QDir::cleanPath(agentDir + "/agent.py"))) {
             issues.append({"agent_dir", QString("Agent 入口不存在: %1").arg(agentDir), true});
         }
+
+        // 会话链接检查（platform_urls 直接存储会话链接，必须为聊天页 URL）
+        {
+            QString sp = m_db->loadConfig("search_platform", "deepseek");
+            QString kp = m_db->loadConfig("synthesis_platform", "deepseek");
+
+            QString urlsJson = m_db->loadConfig("platform_urls", "{}");
+            QJsonObject urls = QJsonDocument::fromJson(urlsJson.toUtf8()).object();
+
+            // 加载聊天路径特征
+            QString patternsJson = m_db->loadConfig("chat_path_patterns", "{}");
+            QJsonObject patterns = QJsonDocument::fromJson(patternsJson.toUtf8()).object();
+
+            // 检查 URL 是否包含平台专属聊天路径（非首页）
+            auto isSessionUrl = [&](const QString &plat, const QString &url) -> bool {
+                if (url.isEmpty()) return false;
+                QJsonArray pats = patterns[plat].toArray();
+                if (pats.isEmpty()) return !url.endsWith("/") || url.endsWith("/c/") || url.endsWith("/chat/");
+                for (const auto &p : pats) {
+                    if (url.contains(p.toString())) return true;
+                }
+                return false;
+            };
+
+            if (!urls.contains(sp) || urls[sp].toString().isEmpty()) {
+                issues.append({"session_url", QString("未配置 %1 平台链接").arg(sp), true});
+            } else if (!isSessionUrl(sp, urls[sp].toString())) {
+                issues.append({"session_url",
+                    QString("%1 平台链接为首页 URL，请替换为聊天页 URL（在浏览器打开 %1 开始聊天后复制地址栏链接）").arg(sp),
+                    true});
+            }
+
+            if (kp != sp) {
+                if (!urls.contains(kp) || urls[kp].toString().isEmpty()) {
+                    issues.append({"session_url", QString("未配置 %1 平台链接，L3 整合将降级本地总结").arg(kp), false});
+                } else if (!isSessionUrl(kp, urls[kp].toString())) {
+                    issues.append({"session_url",
+                        QString("%1 平台链接为首页 URL，L3 整合可能失败").arg(kp),
+                        false});
+                }
+            }
+        }
     }
 
     return issues;
@@ -90,6 +132,8 @@ void AgentManager::setDatabase(Database *db) { m_db = db; }
 void AgentManager::setPythonPath(const QString &path) { m_pythonPath = path; }
 
 void AgentManager::setAgentDir(const QString &dir) { m_agentDir = dir; }
+
+void AgentManager::setDataDir(const QString &dir) { m_dataDir = dir; }
 
 // ============================================================
 // 启动搜索
@@ -190,7 +234,7 @@ bool AgentManager::start(const QString &query, const QString &depth,
         rec.query = query;
         rec.depth = depth;
         rec.platform = searchPlatform + "/" + synthesisPlatform;
-        rec.project = m_db->loadConfig("current_project", "");
+        rec.project = QString();
         rec.status = "running";
         m_lastSearchId = m_db->insertSearchRecord(rec);
     }
@@ -202,7 +246,7 @@ bool AgentManager::start(const QString &query, const QString &depth,
     config["search_platform"] = searchPlatform;
     config["synthesis_platform"] = synthesisPlatform;
     config["cdp_port"] = m_cdpPort;
-    config["data_dir"] = QDir::currentPath() + "/data";
+    config["data_dir"] = m_dataDir.isEmpty() ? QDir::currentPath() + "/data" : m_dataDir;
     config["mock_cdp"] = mockCdp;
 
     // 传递 Python 运行环境信息（避免 Python 回退 config.json）
@@ -229,10 +273,7 @@ bool AgentManager::start(const QString &query, const QString &depth,
         QJsonObject platformUrls = QJsonDocument::fromJson(platformUrlsJson.toUtf8()).object();
         if (platformUrls.isEmpty()) {
             platformUrls = QJsonObject{
-                {"deepseek", "https://chat.deepseek.com/"},
-                {"kimi", "https://www.kimi.com/"},
-                {"chatgpt", "https://chatgpt.com/"},
-                {"gemini", "https://gemini.google.com/"}
+                {"deepseek", "https://chat.deepseek.com/"}
             };
         }
         config["platform_urls"] = platformUrls;
@@ -243,25 +284,8 @@ bool AgentManager::start(const QString &query, const QString &depth,
         if (patterns.isEmpty()) {
             QJsonArray dsArr; dsArr.append(QString("/a/chat/s/"));
             patterns["deepseek"] = dsArr;
-            QJsonArray kiArr; kiArr.append(QString("/chat/"));
-            patterns["kimi"] = kiArr;
-            QJsonArray cgArr; cgArr.append(QString("/c/"));
-            patterns["chatgpt"] = cgArr;
-            QJsonArray gmArr; gmArr.append(QString("/app/"));
-            patterns["gemini"] = gmArr;
         }
         config["chat_path_patterns"] = patterns;
-
-        // 会话链接 —— 从 SQLite 读取
-        QString sessionsJson = m_db->loadConfig("sessions", "{}");
-        QJsonObject sessions = QJsonDocument::fromJson(sessionsJson.toUtf8()).object();
-        config["sessions"] = sessions;
-
-        // 当前项目
-        config["current_project"] = m_db->loadConfig("current_project", "");
-
-        // 会话模式
-        config["session_mode"] = m_db->loadConfig("session_mode", "fixed");
 
         // API 端点与密钥
         config["deepseek_api"] = m_db->loadConfig("deepseek_api", "https://api.deepseek.com/v1");
@@ -284,7 +308,7 @@ bool AgentManager::start(const QString &query, const QString &depth,
 
     writeToStdin(hello);
 
-    // 启动握手超时检测（10s 内必须收到 hello_ack）
+    // 启动握手超时检测（15s 内必须收到 hello_ack）
     m_handshakeTimer->start(HANDSHAKE_TIMEOUT_MS);
 
     // 启动心跳定时器
@@ -578,27 +602,6 @@ void AgentManager::processFrame(const QJsonObject &frame)
                 entry.sources = searches.first().platform;
                 m_db->insertKnowledgeIfNew(entry);
             }
-
-            // === 缓存系统：搜索完成后自动存入 ChromaDB ===
-            if (!reportPath.isEmpty()) {
-                auto searches2 = m_db->recentSearches(1);
-                if (!searches2.isEmpty()) {
-                    const auto &s = searches2.first();
-                    QJsonObject cacheStoreMsg;
-                    cacheStoreMsg["action"] = "cache_store";
-                    cacheStoreMsg["query"] = s.query;
-                    cacheStoreMsg["report_path"] = reportPath;
-                    cacheStoreMsg["project"] = m_db->loadConfig("current_project", "");
-                    cacheStoreMsg["platform"] = s.platform;
-                    cacheStoreMsg["depth"] = s.depth;
-                    cacheStoreMsg["content_len"] = contentLen;
-                    cacheStoreMsg["elapsed_sec"] = elapsed;
-                    cacheStoreMsg["search_history_id"] = static_cast<int>(s.id);
-                    cacheStoreMsg["seq"] = 1;
-                    cacheStoreMsg["timestamp"] = QDateTime::currentSecsSinceEpoch();
-                    writeToStdin(cacheStoreMsg);
-                }
-            }
         }
 
         // 清理
@@ -753,18 +756,18 @@ void AgentManager::onPingTimer()
 
 void AgentManager::onHandshakeTimeout()
 {
-    qWarning() << "[AgentManager] 握手超时（10s 无 hello_ack）→ 强杀 Python";
+    qWarning() << "[AgentManager] 握手超时（15s 无 hello_ack）→ 强杀 Python";
     m_handshakeTimer->stop();
     forceKill();
     emit errorOccurred("handshake_timeout", "system",
-                       "Python Agent 握手超时（10s 无响应），进程已被终止");
+                       "Python Agent 握手超时（15s 无响应），进程已被终止");
 }
 
 // ============================================================
 // 缓存系统
 // ============================================================
 
-void AgentManager::sendCacheQuery(const QString &query, const QString &project,
+void AgentManager::sendCacheQuery(const QString &query,
                                   int topK, double minSimilarity)
 {
     if (m_state != Idle && m_state != Searching) {
@@ -775,7 +778,6 @@ void AgentManager::sendCacheQuery(const QString &query, const QString &project,
     QJsonObject msg;
     msg["action"] = "cache_query";
     msg["query"] = query;
-    msg["project"] = project;
     msg["top_k"] = topK;
     msg["min_similarity"] = minSimilarity;
     msg["seq"] = 1;

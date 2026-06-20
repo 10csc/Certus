@@ -60,6 +60,7 @@ public:
     QList<SearchRecord> recentSearches(int limit = 20,
                                        const QString &filter = {},
                                        const QString &project = {});
+    bool deleteSearchRecord(qint64 id);
 
     // === 可靠性快照 ===
 

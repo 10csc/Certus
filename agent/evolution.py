@@ -99,9 +99,9 @@ class GlobalKnowledge:
             "marker_placement_model": {},
             "known_models": {
                 "deepseek": "deepseek-v4",
-                "kimi": "moonshot-v1-auto",
-                "chatgpt": "gpt-4o",
-                "gemini": "gemini-2.5-pro",
+                "deepseek": "moonshot-v1-auto",
+                "deepseek": "gpt-4o",
+                "deepseek": "gemini-2.5-pro",
             },
             "promotion_rules": {"min_confirmations": 2, "min_content_len": 300},
             "evolution_log": [],

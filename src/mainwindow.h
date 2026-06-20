@@ -17,6 +17,7 @@ class ConfigPage;
 class MonitorPage;
 class MemoryPage;
 class RepairPage;
+class PlatformPage;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -48,12 +49,13 @@ private:
     QListWidget *m_sidebar = nullptr;
     QStackedWidget *m_pages = nullptr;
 
-    // 5 个页面
+    // 6 个页面
     SearchPage *m_searchPage = nullptr;
     ConfigPage *m_configPage = nullptr;
     MonitorPage *m_monitorPage = nullptr;
     MemoryPage *m_memoryPage = nullptr;
     RepairPage *m_repairPage = nullptr;
+    PlatformPage *m_platformPage = nullptr;
 
     // 状态栏
     QLabel *m_statusIcon = nullptr;
@@ -61,9 +63,9 @@ private:
     QTimer *m_statusTimer = nullptr;
 
     // 状态栏右侧永久控件
-    QLabel *m_statusProject = nullptr;   // 项目名
-    QLabel *m_statusDb      = nullptr;   // DB 状态
-    QLabel *m_statusBrowser  = nullptr;  // 浏览器状态
+    QLabel *m_statusProject = nullptr;
+    QLabel *m_statusDb      = nullptr;
+    QLabel *m_statusBrowser  = nullptr;
 
     // Braille spinner
     QTimer *m_spinnerTimer = nullptr;

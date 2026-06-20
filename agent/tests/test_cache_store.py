@@ -54,7 +54,7 @@ class TestCacheStore:
         assert doc_id.startswith("report_")
 
         # 完全相同查询应命中
-        matches = store.query_cache("Python asyncio 并发模型", project="test")
+        matches = store.query_cache("Python asyncio 并发模型")
         assert len(matches) >= 1
         assert matches[0]["query"] == "Python asyncio 并发模型"
         assert matches[0]["similarity"] >= MIN_SIMILARITY
@@ -68,7 +68,7 @@ class TestCacheStore:
         )
 
         # 措辞不同但语义相近
-        matches = store.query_cache("Python 异步编程 asyncio", project="test")
+        matches = store.query_cache("Python 异步编程 asyncio")
         assert len(matches) >= 1
 
     def test_unrelated_query_misses(self, store, sample_report):
@@ -79,24 +79,8 @@ class TestCacheStore:
             metadata={"project": "test"},
         )
 
-        matches = store.query_cache("Rust 所有权机制详解", project="test")
+        matches = store.query_cache("Rust 所有权机制详解")
         assert len(matches) == 0
-
-    def test_project_filter(self, store, sample_report):
-        """项目过滤生效。"""
-        store.store_report(
-            query="Python asyncio 异步框架详细分析",
-            report_text=sample_report,
-            metadata={"project": "project_a"},
-        )
-
-        # 其他项目查不到
-        matches = store.query_cache("Python asyncio 异步框架详细分析", project="project_b")
-        assert len(matches) == 0
-
-        # 同项目能查到
-        matches = store.query_cache("Python asyncio 异步框架详细分析", project="project_a")
-        assert len(matches) >= 1
 
     def test_delete_by_id(self, store, sample_report):
         """删除后查不到。"""
@@ -107,7 +91,7 @@ class TestCacheStore:
         )
 
         assert store.delete_by_id(doc_id) is True
-        matches = store.query_cache("可删除的报告", project="test")
+        matches = store.query_cache("可删除的报告")
         assert len(matches) == 0
 
     def test_stats(self, store, sample_report):
@@ -147,7 +131,7 @@ class TestCacheStore:
 
         # 设置极高阈值，应该过滤掉
         matches = store.query_cache(
-            "Rust 系统编程性能优化", project="test", min_similarity=0.99
+            "Rust 系统编程性能优化", min_similarity=0.99
         )
         assert len(matches) == 0
 

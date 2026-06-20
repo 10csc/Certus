@@ -13,29 +13,29 @@
 namespace Theme {
 
 // ============================================================
-// 调色板
+// 调色板（亮色主题）
 // ============================================================
 
 // 背景层级
-constexpr auto BgPrimary   = "#1e1e1e";   // 主背景
-constexpr auto BgSecondary = "#252525";   // 次级背景（输入框、表格）
-constexpr auto BgTertiary  = "#2c2c2c";   // 三级背景（侧边栏、Tab）
-constexpr auto BgInput     = "#333333";   // 输入控件背景
-constexpr auto BgHover     = "#3c3c3c";   // hover 背景
+constexpr auto BgPrimary   = "#fafafa";   // 主背景
+constexpr auto BgSecondary = "#f0f0f0";   // 次级背景（输入框、表格）
+constexpr auto BgTertiary  = "#e8e8e8";   // 三级背景（侧边栏、Tab）
+constexpr auto BgInput     = "#ffffff";   // 输入控件背景
+constexpr auto BgHover     = "#e0e0e0";   // hover 背景
 
 // 边框
-constexpr auto Border      = "#444444";
-constexpr auto BorderLight = "#555555";
+constexpr auto Border      = "#d0d0d0";
+constexpr auto BorderLight = "#c0c0c0";
 
 // 文字
-constexpr auto TextPrimary   = "#cccccc";
-constexpr auto TextSecondary = "#aaaaaa";
+constexpr auto TextPrimary   = "#1a1a1a";
+constexpr auto TextSecondary = "#555555";
 constexpr auto TextMuted     = "#888888";
 constexpr auto TextWhite     = "#ffffff";
 
 // 语义色
-constexpr auto Accent      = "#0078d4";   // 主操作蓝
-constexpr auto AccentHover = "#0086f0";
+constexpr auto Accent      = "#2563eb";   // 主操作蓝
+constexpr auto AccentHover = "#1d4ed8";
 constexpr auto Success     = "#4caf50";   // 成功绿
 constexpr auto Warning     = "#ff9800";   // 警告橙
 constexpr auto Error       = "#f44336";   // 错误红
@@ -44,9 +44,9 @@ constexpr auto Info        = "#4fc3f7";   // 信息蓝
 // 扩展色
 constexpr auto SuccessDark = "#388e3c";
 constexpr auto ErrorDark   = "#c62828";
-constexpr auto Green       = "#81c784";
-constexpr auto Blue        = "#58a6ff";
-constexpr auto Purple      = "#d2a8ff";
+constexpr auto Green       = "#16a34a";
+constexpr auto Blue        = "#2563eb";
+constexpr auto Purple      = "#7c3aed";
 
 // ============================================================
 // 尺寸

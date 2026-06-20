@@ -26,7 +26,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from agent_protocol import (
-    on_event, write_frame, read_line_frame,
+    on_event, write_frame,
     cancel_flag, ping_received,
     emit_stage_start, emit_stage_done, emit_done,
     emit_error, emit_cancelled,
@@ -61,7 +61,6 @@ def agent_search(user_query, depth="L2", project_context=None,
 
     start_time = time.time()
     config = load_config()
-    project = config.get("current_project", "") or "certus"
 
     # Step 0: 工具选择
     tool_choice = route_tool(user_query)
@@ -79,7 +78,7 @@ def agent_search(user_query, depth="L2", project_context=None,
           file=sys.stderr)
 
     from orchestrator import check_platform_config
-    print(f"[Agent] 平台配置:\n{check_platform_config(project)}", file=sys.stderr)
+    print(f"[Agent] 平台配置:\n{check_platform_config()}", file=sys.stderr)
 
     if actual_depth == "L1":
         return {
@@ -106,13 +105,15 @@ def agent_search(user_query, depth="L2", project_context=None,
     try:
         if quick:
             platform = force_platform or plan_dict["sub_questions"][0]["platform"]
-            content = execute_simple(user_query, platform, actual_depth)
+            content = execute_simple(user_query, platform, actual_depth,
+                                     config=config)
             results = [{"question": user_query, "platform": platform,
                         "content": content, "gaps": [], "links": [],
                         "content_len": len(content) if content else 0}]
             execution = {"results": results, "gaps_total": 0, "all_links": []}
         else:
-            execution = exec_plan(plan_dict, on_event=on_event)
+            execution = exec_plan(plan_dict, on_event=on_event,
+                                  config=config)
             for r in execution.get("results", []):
                 workspace.add_result(
                     r.get("platform", "?"),
@@ -136,29 +137,39 @@ def agent_search(user_query, depth="L2", project_context=None,
         print(format_diagnosis(diag), file=sys.stderr)
         raise
 
-    # Step 3: 整合
-    kp = config.get("synthesis_platform", "kimi")
-    on_event("stage_start", stage="synthesis", question="整合分析中...", platform=kp)
-    report, validation = synthesize(user_query, execution)
-    on_event("stage_done", stage="synthesis", platform=kp,
-             content_len=len(report))
+    # Step 3: 内容有效性检查 —— 没有任何有效内容 = 搜索失败
+    valid_results = [r for r in execution.get("results", []) if r.get("content")]
+    if not valid_results:
+        fail_reason = "所有平台均未返回有效内容"
+        print(f"\n[Agent] ✗ 搜索失败: {fail_reason}", file=sys.stderr)
+        emit_error("search_failed", platform="system",
+                   detail=f"{fail_reason}。请检查：1) 平台链接是否为聊天页 URL  2) 定型是否通过实际收发验证")
+        return {
+            "query": user_query,
+            "error": fail_reason,
+            "results": execution.get("results", []),
+        }
 
     # Step 4: 最终审阅（DeepSeek API 审查整理，确保输出质量）
     from orchestrator import final_review
     sp = config.get("search_platform", "deepseek")
+    kp = config.get("synthesis_platform", "deepseek")
     on_event("stage_start", stage="review", question="最终审阅整理...", platform="本地API")
-    reviewed, review_meta = final_review(execution.get("results", []), user_query)
+    reviewed, review_meta = final_review(valid_results, user_query)
     if reviewed:
         report = reviewed
-        validation["final_review"] = review_meta
+        validation = {"final_review": review_meta, "source_count": len(valid_results)}
         on_event("stage_done", stage="review", platform="本地API",
                  content_len=len(report))
         print(f"[Agent] 最终审阅完成 | 报告 {len(report)} 字符", file=sys.stderr)
     else:
+        # API 审阅失败（如无 key），用本地合成兜底
+        on_event("stage_start", stage="synthesis", question="本地整合中...", platform=kp)
+        report, validation = synthesize(user_query, execution)
         on_event("stage_done", stage="review", platform="本地API",
-                 content_len=len(report), status="skipped",
-                 error=review_meta.get("reason", "未知"))
-        print(f"[Agent] 最终审阅跳过: {review_meta.get('reason', '未知')}", file=sys.stderr)
+                 content_len=len(report), status="local_fallback",
+                 error=review_meta.get("reason", "API 不可用"))
+        print(f"[Agent] 本地合成完成（API审阅跳过: {review_meta.get('reason', '未知')}）", file=sys.stderr)
 
     # 输出报告
     data_dir = output_dir or DATA_DIR
@@ -173,7 +184,7 @@ def agent_search(user_query, depth="L2", project_context=None,
     for r in execution.get("results", []):
         if r.get("content"):
             record_episode(
-                project, r["platform"], r.get("question", "")[:100],
+                "certus", r["platform"], r.get("question", "")[:100],
                 actual_depth, elapsed,
                 credibility=validation.get("confidence", "中") == "高" and 8 or 6,
                 content_len=r.get("content_len", 0),
@@ -364,6 +375,9 @@ def _mock_synthesis_empty(query, mock, depth):
 # 三线程模型
 # ============================================================
 
+# 线程退出信号（主线程退出前设置，避免 daemon 线程在 shutdown 时崩溃）
+_shutdown_event = threading.Event()
+
 
 def _stdin_listener():
     """stdin 监听线程：读取 C++ 控制指令。
@@ -378,8 +392,8 @@ def _stdin_listener():
         # 使用长度前缀帧读取（与 C++ 发送格式一致）
         from agent_protocol import read_frame as read_prefix_frame
         for frame in read_prefix_frame(sys.stdin.buffer):
-            if pipe_broken.is_set():
-                print("[Thread] 管道破裂，stdin 监听退出", file=sys.stderr)
+            if _shutdown_event.is_set() or pipe_broken.is_set():
+                print("[Thread] 退出信号/管道破裂，stdin 监听退出", file=sys.stderr)
                 break
             action = frame.get("action", "")
             if action == "cancel":
@@ -402,17 +416,17 @@ def _stdin_listener():
         print(f"[Thread] stdin 监听线程退出: {e}", file=sys.stderr)
     finally:
         stdin_died_flag.set()
-        print("[Thread] stdin 监听线程已退出 (stdin_thread_died 已设置)", file=sys.stderr)
+        print("[Thread] stdin 监听线程已退出", file=sys.stderr)
 
 
 def _heartbeat():
     """heartbeat 线程：独立回 pong，不阻塞。
 
-    检测 pipe_broken 和 stdin 监听线程死亡，提前退出避免 35s 静默卡死。
+    检测 pipe_broken、shutdown 信号和 stdin 监听线程死亡，提前退出。
     """
     from agent_protocol import pipe_broken, stdin_thread_died as stdin_died_flag
     print("[Thread] heartbeat 线程启动", file=sys.stderr)
-    while True:
+    while not _shutdown_event.is_set():
         if pipe_broken.is_set():
             print("[Heartbeat] 管道破裂 → 退出", file=sys.stderr)
             break
@@ -449,7 +463,7 @@ def run_protocol_mode():
     query = config.get("query", "")
     depth = config.get("depth", "L2")
     search_platform = config.get("search_platform", "deepseek")
-    synthesis_platform = config.get("synthesis_platform", "kimi")
+    synthesis_platform = config.get("synthesis_platform", "deepseek")
     data_dir = config.get("data_dir", DATA_DIR)
     mock_cdp = config.get("mock_cdp", False)
     mock_file = config.get("mock_file", None)
@@ -496,6 +510,25 @@ def run_protocol_mode():
             emit_done(elapsed_sec=0, report_path="", content_len=0)
             return
 
+        # 在 emit_done 前直接写入缓存，消除 C++ 回写 cache_store 的退出竞态
+        if not mock_cdp and report_path and os.path.exists(report_path):
+            try:
+                from cache import get_store
+                store = get_store()
+                if store:
+                    with open(report_path, "r", encoding="utf-8") as f:
+                        report_text = f.read()
+                    store.store_report(result.get("query", query), report_text, {
+                        "project": "",
+                        "platform": search_platform,
+                        "depth": depth,
+                        "report_path": report_path,
+                        "content_len": total_len,
+                        "elapsed_sec": elapsed,
+                    })
+            except Exception as cache_e:
+                print(f"[Agent] 缓存存储跳过 (不阻断): {cache_e}", file=sys.stderr)
+
         # mock_cdp 模式下 done 事件已由 mock 函数内部推送，不重复
         if not mock_cdp:
             emit_done(elapsed_sec=elapsed, report_path=report_path, content_len=total_len)
@@ -507,9 +540,15 @@ def run_protocol_mode():
             emit_error("execution_failed", platform="system", detail=str(e))
         sys.exit(1)
     finally:
-        # 清理
-        print("[Agent] 退出清理", file=sys.stderr)
-        sys.stdout.flush()
+        # 清理：通知 daemon 线程退出，避免 _enter_buffered_busy 崩溃
+        _shutdown_event.set()
+        print("[Agent] 退出清理（已通知子线程退出）", file=sys.stderr)
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        # 给 stdin 监听线程 0.5s 退出，避免 interpreter shutdown 时锁冲突
+        time.sleep(0.5)
 
 
 # ============================================================

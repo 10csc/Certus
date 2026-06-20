@@ -58,6 +58,7 @@ public slots:
 private slots:
     void onStartSearch();
     void onHistoryItemClicked(QListWidgetItem *item);
+    void onHistoryContextMenu(const QPoint &pos);
     void loadReport(const QString &path);
     void updateStatusAnimation();
 

@@ -204,11 +204,11 @@ if __name__ == "__main__":
     ws = WorkspaceState()
     ws.set_query("Python asyncio vs Trio 2026 选型")
     ws.add_result("deepseek", "asyncio breaking changes", 3500, 0, 5)
-    ws.add_result("kimi", "Trio 最新版本特性", 4200, 1, 8)
+    ws.add_result("deepseek", "Trio 最新版本特性", 4200, 1, 8)
     ws.complete()
     print("Workspace:", ws.get_summary())
 
     record_episode("test", "deepseek", "Python asyncio", "L2", 45, 8, 3500, 0)
-    record_episode("test", "kimi", "Python asyncio", "L2", 32, 7, 4200, 1)
+    record_episode("test", "deepseek", "Python asyncio", "L2", 32, 7, 4200, 1)
     print("Episodes:", len(read_episodes("test")))
     print("Stats:", get_platform_stats("test"))

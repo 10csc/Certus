@@ -41,7 +41,7 @@ def dom_extract(page, platform="deepseek"):
         count = msgs.count()
         if count > 0:
             text = msgs.nth(count - 1).text_content() or ""
-            if len(text) > 150:
+            if len(text) > 20:  # 20 字符即可（排除空消息/噪声，兼容短回复）
                 return text.strip()
     except Exception:
         pass

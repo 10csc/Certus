@@ -69,11 +69,22 @@ static void emitError(const QString &errorType, const QString &detail)
 // 搜索命令
 // ============================================================
 
+static QString findProjectRoot()
+{
+    QDir dir(QCoreApplication::applicationDirPath());
+    for (int up = 0; up <= 3; up++) {
+        if (QFile::exists(dir.absolutePath() + "/agent/agent.py")) break;
+        if (!dir.cdUp()) return QCoreApplication::applicationDirPath();
+    }
+    return dir.absolutePath();
+}
+
 int cmdSearch(const QString &query, const QString &depth,
               const QString &searchPlatform, const QString &synthesisPlatform,
               const QString &cdpPort, bool mockCdp, const QString &outputPath)
 {
-    QString dbPath = QDir::currentPath() + "/data/certus.db";
+    QString projectRoot = findProjectRoot();
+    QString dbPath = projectRoot + "/data/certus.db";
     Database db(dbPath);
     if (!db.open()) {
         emitError("db_open_failed", "无法打开数据库: " + dbPath);
@@ -88,12 +99,9 @@ int cmdSearch(const QString &query, const QString &depth,
     AgentManager agent;
     agent.setDatabase(&db);
 
-    QString agentDir = QCoreApplication::applicationDirPath() + "/../agent";
-    if (!QDir(agentDir).exists()) {
-        agentDir = QDir::currentPath() + "/agent";
-    }
+    QString agentDir = projectRoot + "/agent";
     agent.setAgentDir(QDir::cleanPath(agentDir));
-    agent.setPythonPath("python");
+    agent.setPythonPath(db.loadConfig("python_path", "python"));
 
     // 输出启动信息
     emitJson("search_started", {
@@ -223,7 +231,7 @@ int cmdBrowser(bool start, int port)
 
 int cmdConfig(const QString &cdpPort, const QString &apiKey)
 {
-    QString dbPath = QDir::currentPath() + "/data/certus.db";
+    QString dbPath = findProjectRoot() + "/data/certus.db";
     Database db(dbPath);
     if (!db.open()) {
         emitError("db_open_failed", "无法打开数据库");
@@ -257,7 +265,7 @@ int cmdConfig(const QString &cdpPort, const QString &apiKey)
 
 int cmdStatus()
 {
-    QString dbPath = QDir::currentPath() + "/data/certus.db";
+    QString dbPath = findProjectRoot() + "/data/certus.db";
     Database db(dbPath);
     if (!db.open()) {
         emitJson("status", {
@@ -310,7 +318,8 @@ int cmdStatus()
 
 int cmdValidate()
 {
-    QString dbPath = QDir::currentPath() + "/data/certus.db";
+    QString projectRoot = findProjectRoot();
+    QString dbPath = projectRoot + "/data/certus.db";
     Database db(dbPath);
     if (!db.open()) {
         emitError("db_open_failed", "无法打开数据库");
@@ -320,12 +329,9 @@ int cmdValidate()
     AgentManager agent;
     agent.setDatabase(&db);
 
-    // Agent 路径探测
-    QString agentDir = QCoreApplication::applicationDirPath() + "/../agent";
-    if (!QDir(agentDir).exists())
-        agentDir = QDir::currentPath() + "/agent";
+    QString agentDir = projectRoot + "/agent";
     agent.setAgentDir(QDir::cleanPath(agentDir));
-    agent.setPythonPath("python");
+    agent.setPythonPath(db.loadConfig("python_path", "python"));
 
     auto issues = agent.validateConfig();
 
@@ -380,7 +386,7 @@ int main(int argc, char *argv[])
     // === 搜索选项 ===
     QCommandLineOption depthOpt("depth", "搜索深度 (L2/L3)", "depth", "L2");
     QCommandLineOption searchPlatOpt("search-platform", "搜索平台", "platform", "deepseek");
-    QCommandLineOption synthPlatOpt("synthesis-platform", "整合平台", "platform", "kimi");
+    QCommandLineOption synthPlatOpt("synthesis-platform", "整合平台", "platform", "deepseek");
     QCommandLineOption cdpPortOpt("cdp-port", "CDP 端口", "port", "9223");
     QCommandLineOption mockOpt("mock-cdp", "Mock CDP 模式（无浏览器）");
     QCommandLineOption stdinOpt("stdin", "从 stdin 读取搜索问题");

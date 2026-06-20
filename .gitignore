@@ -4,20 +4,34 @@ __pycache__/
 *.pyo
 venv/
 
-# 运行时数据（含敏感信息如 API key）
-config.json
-data/
+# 运行时数据（含敏感信息：加密 API Key、搜索历史等）
+data/*
 !data/.gitkeep
+
+# 日志
+logs/
+
+# 文档（构建后生成，从源码可重建）
+docs/
 
 # 构建产物
 build/
 dist/
 *.exe
+*.dll
+
+# 自动部署的 Qt 插件目录（根目录）
+platforms/
+sqldrivers/
 
 # IDE
 .vs/
 .vscode/
 *.user
+
+# Claude Code 本地设置
+.claude/
+CLAUDE.md
 
 # OS
 Thumbs.db

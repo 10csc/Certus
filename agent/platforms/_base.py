@@ -236,3 +236,129 @@ def dismiss_blockers_base(page):
         time.sleep(0.3)
     except Exception:
         pass
+
+
+def find_file_input(page):
+    """查找文件上传入口。
+
+    策略：
+      1. input[type="file"]（隐藏或可见）
+      2. 带上传相关 aria-label/text 的按钮
+      3. 带 upload/attach/file 类名的按钮
+    返回 (element, method) 或 (None, None)。
+    """
+    # 策略 1: input[type="file"]（通常隐藏，但 Playwright 可直接 set_input_files）
+    try:
+        file_inputs = page.locator('input[type="file"]')
+        count = file_inputs.count()
+        if count > 0:
+            return file_inputs.first, "input_file"
+    except Exception:
+        pass
+
+    # 策略 2: 带上传语义的按钮
+    upload_selectors = [
+        'button[aria-label*="upload" i]',
+        'button[aria-label*="Upload"]',
+        'button[aria-label*="上传"]',
+        'button[aria-label*="附件"]',
+        'button[aria-label*="attach" i]',
+        'button[data-testid*="upload"]',
+        'button[data-testid*="attach"]',
+        '[role="button"][aria-label*="upload" i]',
+    ]
+    for sel in upload_selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible():
+                return btn, "upload_button"
+        except Exception:
+            continue
+
+    # 策略 3: 带上传相关文字的按钮/图标
+    try:
+        result = page.evaluate("""() => {
+            let els = document.querySelectorAll('button, [role=button], svg');
+            for (let el of els) {
+                let a = (el.getAttribute('aria-label') || '').toLowerCase();
+                let t = (el.textContent || '').toLowerCase();
+                let c = (el.className || '').toString().toLowerCase();
+                if (a.includes('upload') || a.includes('file') || a.includes('attach') ||
+                    a.includes('上传') || a.includes('附件') || a.includes('文件') ||
+                    t.includes('上传') || t.includes('附件') ||
+                    c.includes('upload') || c.includes('attach')) {
+                    let r = el.getBoundingClientRect();
+                    if (r.width > 5 && r.height > 5) {
+                        return {
+                            tag: el.tagName,
+                            aria: a.substring(0, 60),
+                            text: t.substring(0, 40),
+                            className: c.substring(0, 80),
+                            rect: {x: Math.round(r.x), y: Math.round(r.y),
+                                   w: Math.round(r.width), h: Math.round(r.height)},
+                        };
+                    }
+                }
+            }
+            return null;
+        }""")
+        if result:
+            return result, "upload_heuristic"
+    except Exception:
+        pass
+
+    return None, None
+
+
+def safe_upload_file(page, file_path, custom_selectors=None):
+    """通用文件上传流程。
+
+    1. 查找 input[type="file"] → 直接 set_input_files（最可靠）
+    2. 查找上传按钮 → 点击触发文件选择器 → 通过 file_chooser 事件设置
+    3. 都失败 → 返回 False
+    """
+    import os
+    if not os.path.exists(file_path):
+        print(f"[base] 文件不存在: {file_path}")
+        return False
+
+    # 策略 1: input[type="file"] 直接设置（不需要点击）
+    try:
+        file_input = page.locator('input[type="file"]').first
+        file_input.set_input_files(file_path)
+        time.sleep(1)
+        print(f"[base] ✓ input[type=file] 直接设置成功")
+        return True
+    except Exception as e:
+        print(f"[base] input[type=file] 不可用: {e}")
+
+    # 策略 2: 点击上传按钮 + file_chooser 事件
+    try:
+        upload_btn = None
+        if custom_selectors:
+            for sel in custom_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if btn.is_visible():
+                        upload_btn = btn
+                        break
+                except Exception:
+                    continue
+
+        if not upload_btn:
+            el, method = find_file_input(page)
+            if el and method == "upload_button":
+                upload_btn = el
+
+        if upload_btn:
+            with page.expect_file_chooser(timeout=5000) as fc_info:
+                upload_btn.click()
+            file_chooser = fc_info.value
+            file_chooser.set_files(file_path)
+            time.sleep(1)
+            print(f"[base] ✓ 通过 file_chooser 上传成功")
+            return True
+    except Exception as e:
+        print(f"[base] file_chooser 方式失败: {e}")
+
+    return False

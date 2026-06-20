@@ -50,7 +50,6 @@ class CacheProtocolHandler:
     def _handle_query(self, frame, write_fn):
         """处理 cache_query：语义搜索历史报告。"""
         query = frame.get("query", "")
-        project = frame.get("project", "")
         top_k = frame.get("top_k", 5)
         min_sim = frame.get("min_similarity", 0.85)
 
@@ -60,7 +59,7 @@ class CacheProtocolHandler:
 
         try:
             matches = self._store.query_cache(
-                query, project=project, top_k=top_k, min_similarity=min_sim
+                query, top_k=top_k, min_similarity=min_sim
             )
             if matches:
                 write_fn("cache_hit", matches=matches)

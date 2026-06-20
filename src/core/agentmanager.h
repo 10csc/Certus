@@ -43,12 +43,13 @@ public:
     void setDatabase(Database *db);
     void setPythonPath(const QString &path);
     void setAgentDir(const QString &dir);
+    void setDataDir(const QString &dir);
 
     /// 启动搜索
     bool start(const QString &query,
                const QString &depth = "L2",
                const QString &searchPlatform = "deepseek",
-               const QString &synthesisPlatform = "kimi",
+               const QString &synthesisPlatform = "deepseek",
                const QString &cdpPort = "9223",
                bool mockCdp = false);
 
@@ -81,7 +82,7 @@ public:
     // === 缓存系统 ===
 
     /// 发送缓存查询指令到 Python 端（搜索前调用）
-    void sendCacheQuery(const QString &query, const QString &project = "",
+    void sendCacheQuery(const QString &query,
                         int topK = 3, double minSimilarity = 0.85);
 
 signals:
@@ -136,6 +137,7 @@ private:
 
     QString m_pythonPath = "python";
     QString m_agentDir;
+    QString m_dataDir;    // 项目根/data（由 main_gui 传入）
     QString m_cdpPort;
 
     State m_state = Idle;

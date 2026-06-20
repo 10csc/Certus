@@ -41,11 +41,7 @@ void RepairPage::setupUi()
     auto *toolbar = new QHBoxLayout();
 
     m_modelCombo = new QComboBox(this);
-    m_modelCombo->addItem("Claude Opus 4.7",    "claude|claude-opus-4-7");
-    m_modelCombo->addItem("Claude Sonnet 4.6",  "claude|claude-sonnet-4-6");
-    m_modelCombo->addItem("Claude Haiku 4.5",   "claude|claude-haiku-4-5");
-    m_modelCombo->addItem("Codex (OpenAI)",      "codex|gpt-4o");
-    m_modelCombo->addItem("DeepSeek V4",         "deepseek|deepseek-chat");
+    m_modelCombo->addItem("DeepSeek V4", "deepseek|deepseek-chat");
     toolbar->addWidget(new QLabel("模型:", this));
     toolbar->addWidget(m_modelCombo);
 
@@ -70,10 +66,9 @@ void RepairPage::setupUi()
     m_chatView->setReadOnly(true);
     m_chatView->setHtml(
         "<div style='color:#888; text-align:center; margin-top:60px;'>"
-        "<p style='font-size:16px;'>辅助修复 —— 多模型 AI 诊断</p>"
-        "<p>选择模型，可选添加代码文件作为上下文，然后输入错误信息</p>"
-        "<p style='color:#666;'>支持 Claude (Anthropic) / Codex (OpenAI) / DeepSeek</p>"
-        "<p style='color:#555;'>提示: 点击「+ 添加文件上下文」可选中 agent/*.py 或 src/*.cpp 作为诊断参考</p></div>");
+        "<p style='font-size:16px;'>辅助修复 —— AI 代码诊断</p>"
+        "<p>可选添加代码文件作为上下文，然后输入错误信息</p>"
+        "<p style='color:#999;'>提示: 点击「+ 添加文件上下文」可选中 agent/*.py 或 src/*.cpp 作为诊断参考</p></div>");
     layout->addWidget(m_chatView, 1);
 
     // === 输入行 ===
@@ -126,7 +121,8 @@ void RepairPage::onSelectFiles()
     }
 
     appendSystemMessage(QString(
-        "<span style='color:#81c784;'>✓ 已加载 %1 个文件作为上下文: %2</span>")
+        "<span style='color:%1;'>✓ 已加载 %2 个文件作为上下文: %3</span>")
+        .arg(Theme::Green)
         .arg(m_contextFiles.size())
         .arg(m_contextFiles.join(", ")));
 }
@@ -176,40 +172,11 @@ QString RepairPage::buildSystemPrompt() const
 // 构建 API 请求
 // ============================================================
 
-QJsonObject RepairPage::buildApiRequest(const QString &provider,
-                                         const QString &model,
-                                         const QString &apiKey,
+QJsonObject RepairPage::buildApiRequest(const QString &model,
                                          const QString &userText) const
 {
     QString systemPrompt = buildSystemPrompt();
 
-    if (provider == "claude") {
-        // Anthropic Messages API
-        QJsonObject req;
-        req["model"] = model;
-        req["max_tokens"] = 4096;
-        req["temperature"] = 0.3;
-
-        QJsonArray messages;
-        QJsonObject userMsg;
-        userMsg["role"] = "user";
-
-        // Claude 不支持 system role 在 messages 中，需要在顶层设置
-        req["system"] = systemPrompt;
-
-        QJsonArray content;
-        QJsonObject textBlock;
-        textBlock["type"] = "text";
-        textBlock["text"] = userText;
-        content.append(textBlock);
-        userMsg["content"] = content;
-        messages.append(userMsg);
-        req["messages"] = messages;
-
-        return req;
-    }
-
-    // OpenAI 兼容 API (Codex / DeepSeek)
     QJsonObject req;
     req["model"] = model;
     req["temperature"] = 0.3;
@@ -246,23 +213,10 @@ void RepairPage::onSend()
 
     // 解析模型选择
     QStringList parts = m_modelCombo->currentData().toString().split('|');
-    QString provider = parts.value(0, "deepseek");
     QString model = parts.value(1, "deepseek-chat");
 
-    // 根据 provider 读取对应的 API 配置
-    QString apiUrl;
-    QString apiKey;
-
-    if (provider == "claude") {
-        apiUrl = "https://api.anthropic.com/v1/messages";
-        apiKey = m_db->loadConfig("claude_key", "");
-    } else if (provider == "codex") {
-        apiUrl = m_db->loadConfig("codex_api", "https://api.openai.com/v1") + "/chat/completions";
-        apiKey = m_db->loadConfig("codex_key", "");
-    } else {  // deepseek
-        apiUrl = m_db->loadConfig("deepseek_api", "https://api.deepseek.com/v1") + "/chat/completions";
-        apiKey = m_db->loadConfig("deepseek_key", "");
-    }
+    QString apiUrl = m_db->loadConfig("deepseek_api", "https://api.deepseek.com/v1") + "/chat/completions";
+    QString apiKey = m_db->loadConfig("deepseek_key", "");
 
     // 解密 API Key
     if (!apiKey.isEmpty()) {
@@ -270,27 +224,20 @@ void RepairPage::onSend()
     }
 
     if (apiKey.isEmpty()) {
-        appendSystemMessage(QString(
-            "<span style='color:#ff9800;'>⚠ %1 API Key 未配置，请在「配置」页设置</span>")
-            .arg(provider == "claude" ? "Claude" : (provider == "codex" ? "Codex" : "DeepSeek")));
+        appendSystemMessage(
+            QString("<span style='color:%1;'>⚠ DeepSeek API Key 未配置，请在「配置」页设置</span>").arg(Theme::Warning));
         m_sendBtn->setEnabled(true);
         m_sendBtn->setText("发送");
         return;
     }
 
     // 构建请求
-    QJsonObject payload = buildApiRequest(provider, model, apiKey, text);
+    QJsonObject payload = buildApiRequest(model, text);
 
     QNetworkRequest netReq;
     netReq.setUrl(QUrl(apiUrl));
     netReq.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-
-    if (provider == "claude") {
-        netReq.setRawHeader("x-api-key", apiKey.toUtf8());
-        netReq.setRawHeader("anthropic-version", "2023-06-01");
-    } else {
-        netReq.setRawHeader("Authorization", ("Bearer " + apiKey).toUtf8());
-    }
+    netReq.setRawHeader("Authorization", ("Bearer " + apiKey).toUtf8());
 
     QByteArray postData = QJsonDocument(payload).toJson();
     m_network->post(netReq, postData);
@@ -311,15 +258,15 @@ void RepairPage::onReplyFinished(QNetworkReply *reply)
             reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
         if (statusCode == 401) {
-            appendSystemMessage("<span style='color:#f44336;'>✗ API Key 无效 (401)，请检查配置</span>");
+            appendSystemMessage(QString("<span style='color:%1;'>✗ API Key 无效 (401)，请检查配置</span>").arg(Theme::Error));
         } else if (statusCode == 403) {
-            appendSystemMessage("<span style='color:#f44336;'>✗ 访问被拒 (403)，请检查 API 权限</span>");
+            appendSystemMessage(QString("<span style='color:%1;'>✗ 访问被拒 (403)，请检查 API 权限</span>").arg(Theme::Error));
         } else if (statusCode == 429) {
-            appendSystemMessage("<span style='color:#ff9800;'>⚠ 请求过于频繁 (429)，请稍后重试</span>");
+            appendSystemMessage(QString("<span style='color:%1;'>⚠ 请求过于频繁 (429)，请稍后重试</span>").arg(Theme::Warning));
         } else if (statusCode >= 500) {
-            appendSystemMessage(QString("<span style='color:#f44336;'>✗ API 服务器错误 (%1)</span>").arg(statusCode));
+            appendSystemMessage(QString("<span style='color:%1;'>✗ API 服务器错误 (%2)</span>").arg(Theme::Error).arg(statusCode));
         } else {
-            appendSystemMessage(QString("<span style='color:#f44336;'>✗ 网络错误: %1</span>").arg(errMsg));
+            appendSystemMessage(QString("<span style='color:%1;'>✗ 网络错误: %2</span>").arg(Theme::Error).arg(errMsg));
         }
         reply->deleteLater();
         return;
@@ -351,7 +298,7 @@ void RepairPage::onReplyFinished(QNetworkReply *reply)
     }
 
     if (content.isEmpty()) {
-        appendSystemMessage("<span style='color:#f44336;'>✗ AI 回复为空</span>");
+        appendSystemMessage(QString("<span style='color:%1;'>✗ AI 回复为空</span>").arg(Theme::Error));
         return;
     }
 
@@ -395,7 +342,7 @@ void RepairPage::onApplyFix()
 
     if (fixes.isEmpty()) {
         appendSystemMessage(
-            "<span style='color:#ff9800;'>⚠ AI 回复中未检测到可应用的修复块 (```fix 或 ```diff)</span>");
+            QString("<span style='color:%1;'>⚠ AI 回复中未检测到可应用的修复块 (```fix 或 ```diff)</span>").arg(Theme::Warning));
         return;
     }
 
@@ -415,7 +362,7 @@ void RepairPage::onApplyFix()
         QString replaceText = replaceRe.match(fixBlock).captured(1).trimmed();
 
         if (fileName.isEmpty()) {
-            results.append("<span style='color:#ff9800;'>⚠ 修复块缺少文件名，跳过</span>");
+            results.append(QString("<span style='color:%1;'>⚠ 修复块缺少文件名，跳过</span>").arg(Theme::Warning));
             continue;
         }
 
@@ -432,7 +379,7 @@ void RepairPage::onApplyFix()
 
         if (filePath.isEmpty()) {
             results.append(QString(
-                "<span style='color:#ff9800;'>⚠ 找不到文件: %1</span>").arg(fileName));
+                "<span style='color:%1;'>⚠ 找不到文件: %2</span>").arg(Theme::Warning).arg(fileName));
             continue;
         }
 
@@ -440,7 +387,7 @@ void RepairPage::onApplyFix()
         QFile file(filePath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             results.append(QString(
-                "<span style='color:#f44336;'>✗ 无法读取: %1</span>").arg(fileName));
+                "<span style='color:%1;'>✗ 无法读取: %2</span>").arg(Theme::Error).arg(fileName));
             continue;
         }
         QString original = QString::fromUtf8(file.readAll());
@@ -463,7 +410,7 @@ void RepairPage::onApplyFix()
         // 写入修复
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
             results.append(QString(
-                "<span style='color:#f44336;'>✗ 无法写入: %1</span>").arg(fileName));
+                "<span style='color:%1;'>✗ 无法写入: %2</span>").arg(Theme::Error).arg(fileName));
             continue;
         }
         QTextStream out(&file);
@@ -473,14 +420,14 @@ void RepairPage::onApplyFix()
 
         applied++;
         results.append(QString(
-            "<span style='color:#81c784;'>✓ 已修复: %1 (备份: %1.bak)</span>").arg(fileName));
+            "<span style='color:%1;'>✓ 已修复: %2 (备份: %2.bak)</span>").arg(Theme::Green).arg(fileName));
     }
 
     if (applied > 0) {
         appendSystemMessage(QString(
             "<b>应用修复结果:</b><br>%1<br>"
-            "<span style='color:#aaa;'>共应用 %2 处修复，原文件已备份为 .bak</span>")
-            .arg(results.join("<br>")).arg(applied));
+            "<span style='color:%2;'>共应用 %3 处修复，原文件已备份为 .bak</span>")
+            .arg(results.join("<br>")).arg(Theme::TextMuted).arg(applied));
     } else {
         appendSystemMessage(QString(
             "<b>应用修复结果:</b><br>%1").arg(results.join("<br>")));
@@ -504,8 +451,8 @@ static QString renderMarkdown(const QString &md)
     for (const QString &l : lines) {
         if (l.startsWith("```")) {
             if (inCodeBlock) {
-                html += "<pre style='background:#0d1117;padding:12px 16px;border-radius:4px;"
-                        "border:1px solid #30363d;overflow-x:auto;margin:8px 0;"
+                html += "<pre style='background:#f5f5f5;padding:12px 16px;border-radius:4px;"
+                        "border:1px solid #e0e0e0;overflow-x:auto;margin:8px 0;"
                         "font-family:Consolas,monospace;font-size:12px;'>"
                         "<code>" + codeBuf.toHtmlEscaped() + "</code></pre>";
                 codeBuf.clear();
@@ -523,14 +470,14 @@ static QString renderMarkdown(const QString &md)
         }
 
         if (l.startsWith("### ")) {
-            html += "<h4 style='color:#d2a8ff;margin:14px 0 4px;'>" + l.mid(4).toHtmlEscaped() + "</h4>";
+            html += "<h4 style='color:#7c3aed;margin:14px 0 4px;'>" + l.mid(4).toHtmlEscaped() + "</h4>";
         } else if (l.startsWith("## ")) {
-            html += "<h3 style='color:#7ee787;margin:16px 0 6px;'>" + l.mid(3).toHtmlEscaped() + "</h3>";
+            html += "<h3 style='color:#16a34a;margin:16px 0 6px;'>" + l.mid(3).toHtmlEscaped() + "</h3>";
         } else if (l.startsWith("# ")) {
-            html += "<h2 style='color:#58a6ff;margin:18px 0 8px;'>" + l.mid(2).toHtmlEscaped() + "</h2>";
+            html += "<h2 style='color:#2563eb;margin:18px 0 8px;'>" + l.mid(2).toHtmlEscaped() + "</h2>";
         } else if (l.startsWith("> ")) {
-            html += "<blockquote style='border-left:3px solid #58a6ff;padding:4px 12px;"
-                    "margin:6px 0;color:#8b949e;background:#1c2129;'>"
+            html += "<blockquote style='border-left:3px solid #2563eb;padding:4px 12px;"
+                    "margin:6px 0;color:#555555;background:#f0f0f0;'>"
                     + l.mid(2).toHtmlEscaped() + "</blockquote>";
         } else if (l.trimmed().startsWith("- ") || l.trimmed().startsWith("* ")) {
             html += "<li style='margin:2px 0;'>" + l.trimmed().mid(2).toHtmlEscaped() + "</li>";
@@ -540,14 +487,14 @@ static QString renderMarkdown(const QString &md)
             // 内联格式化
             QString t = l.toHtmlEscaped();
             t.replace(QRegularExpression("\\*\\*(.+?)\\*\\*"), "<strong>\\1</strong>");
-            t.replace(QRegularExpression("`(.+?)`"), "<code style='background:#1c2129;color:#f0883e;"
+            t.replace(QRegularExpression("`(.+?)`"), "<code style='background:#f0f0f0;color:#c2410c;"
                       "padding:1px 5px;border-radius:3px;font-family:Consolas,monospace;'>\\1</code>");
             html += "<p style='margin:6px 0;'>" + t + "</p>";
         }
     }
     if (!codeBuf.isEmpty()) {
-        html += "<pre style='background:#0d1117;padding:12px 16px;border-radius:4px;"
-                "border:1px solid #30363d;overflow-x:auto;margin:8px 0;'>"
+        html += "<pre style='background:#f5f5f5;padding:12px 16px;border-radius:4px;"
+                "border:1px solid #e0e0e0;overflow-x:auto;margin:8px 0;'>"
                 "<code>" + codeBuf.toHtmlEscaped() + "</code></pre>";
     }
     html += "</div>";
@@ -580,10 +527,10 @@ void RepairPage::appendUserMessage(const QString &text)
 void RepairPage::appendAiMessage(const QString &html)
 {
     m_chatView->append(
-        QString("<div style='background:#252525; border-left:3px solid #4caf50; "
+        QString("<div style='background:%1; border-left:3px solid %2; "
                 "padding:8px 14px; margin:8px 0; border-radius:0 4px 4px 0;'>"
-                "<p style='color:#81c784; margin:0 0 6px 0;'><strong>AI:</strong></p>%1</div>")
-            .arg(html));
+                "<p style='color:%3; margin:0 0 6px 0;'><strong>AI:</strong></p>%4</div>")
+            .arg(Theme::BgSecondary, Theme::Success, Theme::Green, html));
     scrollToBottom();
 }
 

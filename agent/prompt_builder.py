@@ -13,6 +13,58 @@ RELIABILITY_PATTERNS = {
 }
 
 
+def refine_query(user_query):
+    """查询重构 —— 将用户原始输入优化为适合 AI 搜索的结构化问题。
+
+    解决的问题：用户输入往往是需求文档/想法描述，而非搜索问题。
+    例如：
+      原始: "我想做一个XX工具，功能1...功能2...可行性分析关注..."
+      优化: "XX工具的技术可行性分析：核心功能架构、关键难点（A/B/C）及现有解决方案"
+
+    规则：
+    - 短且清晰的输入（≤100字，无换行）直接返回，不做多余处理
+    - 重构只改格式和结构，不改语义（不增删用户意图）
+    """
+    # 快速判断：短且干净的输入不需要重构
+    stripped = user_query.strip()
+    if len(stripped) <= 100 and '\n' not in stripped:
+        return stripped
+
+    try:
+        from common import call_deepseek_api
+        refined = call_deepseek_api(
+            system_prompt=(
+                "你是搜索查询优化器。将用户输入重构为适合 AI 深度搜索的问题。\n\n"
+                "规则：\n"
+                "1. 保留用户的所有意图和关注点，不增删内容\n"
+                "2. 将需求描述/想法转化为明确的研究问题\n"
+                "3. 多要点时用分号分隔，保持一段话（不超过 200 字）\n"
+                "4. 去掉「我想」「请问」等口语，用客观陈述\n"
+                "5. 确保输出可以直接作为搜索主题（AI 能理解要搜什么）\n"
+                "6. 只输出优化后的查询，不要任何解释\n\n"
+                "严格禁止：\n"
+                "- 禁止改变用户的领域/主题（用户问小说就保持小说，问技术就保持技术）\n"
+                "- 禁止添加用户没有提及的概念（如「哲学范式」「实证主义」）\n"
+                "- 禁止将具体需求抽象为学术术语"
+            ),
+            user_prompt=stripped,
+            model="deepseek-v4-pro",
+            max_tokens=300,
+            temperature=0.1,
+            timeout=30,
+        )
+        if refined:
+            result = refined.strip().strip('"').strip('*')
+            if result and len(result) > 10:
+                return result
+    except Exception as e:
+        print(f"[Refine] LLM 重构失败: {e}，使用原始输入")
+
+    # 兜底：取第一行或前 200 字符
+    first_line = stripped.split('\n')[0].strip()
+    return first_line[:200] if first_line else stripped[:200]
+
+
 def extract_intent(user_context):
     """提取搜索主题（≤40字），用于生成 topic 标记。"""
     # 含 traceback → 截取核心错误
@@ -65,12 +117,24 @@ def build_search_prompt(topic, depth="L2"):
     - 无法确认的结论诚实标注而非编造
     - 优先使用高可信度信源（官方文档、学术论文、开源仓库）
     """
-    topic, marker = _make_topic_marker(topic)
-    core = topic.split("@")[0]
+    # 标记必须用短主题（AI 才会在回复中 echo 回来）
+    original_topic = topic
+    if len(topic) > 80:
+        short_topic = extract_intent(topic)
+    else:
+        short_topic = topic
+    topic_with_hash, marker = _make_topic_marker(short_topic)
+    core = topic_with_hash.split("@")[0]
+
+    # 原始查询比 core 丰富时，附加上下文（让 AI 知道完整需求）
+    detail_block = ""
+    if len(original_topic) > len(core) + 40:
+        detail_block = f"\n\n---\n补充上下文（完整需求）：\n{original_topic[:500]}"
 
     prompt = (
         f"请联网搜索并深入分析以下问题，自行设计搜索策略和回复结构：\n\n"
-        f"**{core}**\n\n"
+        f"**{core}**\n"
+        f"{detail_block}\n"
         f"---\n"
         f"【可靠性要求】\n"
         f"1. 每条关键结论必须标注可信度——**必须附带具体URL**（禁止只写名称）：\n"
@@ -84,7 +148,7 @@ def build_search_prompt(topic, depth="L2"):
         f"   - [标题](URL) —— 便于系统提取和评分\n\n"
         f"{_marker_fence(marker)}"
     )
-    return topic, prompt
+    return topic_with_hash, prompt
 
 
 def build_synthesis_prompt(topic, depth="L2"):
@@ -96,12 +160,22 @@ def build_synthesis_prompt(topic, depth="L2"):
     - 生成带可信度评分的最终报告
     - 无法验证的标注 [未确认]，不编造确认来源
     """
-    topic, marker = _make_topic_marker(topic)
-    core = topic.split("@")[0]
+    original_topic = topic
+    if len(topic) > 80:
+        short_topic = extract_intent(topic)
+    else:
+        short_topic = topic
+    topic_with_hash, marker = _make_topic_marker(short_topic)
+    core = topic_with_hash.split("@")[0]
+
+    detail_block = ""
+    if len(original_topic) > len(core) + 40:
+        detail_block = f"\n\n---\n补充上下文（完整需求）：\n{original_topic[:500]}"
 
     prompt = (
         f"你是一位研究审核员。请对以下素材进行独立验证并生成最终报告：\n\n"
-        f"**{core}**\n\n"
+        f"**{core}**\n"
+        f"{detail_block}\n"
         f"---\n"
         f"【验证要求】\n"
         f"1. 提取素材中的每条关键结论，独立搜索至少一次进行确认\n"
@@ -115,7 +189,7 @@ def build_synthesis_prompt(topic, depth="L2"):
         f"5. 最终报告应包含：概述、已验证结论、存疑结论、矛盾标记、可信度评分\n\n"
         f"{_marker_fence(marker)}"
     )
-    return topic, prompt
+    return topic_with_hash, prompt
 
 
 def build_final_prompt(topic, depth="L2"):

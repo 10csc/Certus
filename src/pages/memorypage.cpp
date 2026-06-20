@@ -116,14 +116,14 @@ void MemoryPage::loadDetail(qint64 id)
         return;
     }
     QString html = QString(
-        "<h3 style='color:#4fc3f7; margin:0;'>%1</h3>"
-        "<p style='margin:8px 0;'><b>结论：</b>%2</p>"
-        "<p style='color:#888; margin:4px 0;'><b>来源：</b>%3</p>"
-        "<p style='color:#666; margin:4px 0;'><b>时间：</b>%4</p>")
-        .arg(e.topic.toHtmlEscaped(),
+        "<h3 style='color:%1; margin:0;'>%2</h3>"
+        "<p style='margin:8px 0;'><b>结论：</b>%3</p>"
+        "<p style='color:%4; margin:4px 0;'><b>来源：</b>%5</p>"
+        "<p style='color:%6; margin:4px 0;'><b>时间：</b>%7</p>")
+        .arg(Theme::Info, e.topic.toHtmlEscaped(),
              e.conclusion.toHtmlEscaped(),
-             e.sources.toHtmlEscaped(),
-             e.createdAt);
+             Theme::TextMuted, e.sources.toHtmlEscaped(),
+             Theme::TextMuted, e.createdAt);
     m_detailView->setHtml(html);
 }
 

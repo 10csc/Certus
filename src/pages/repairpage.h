@@ -1,9 +1,8 @@
 #pragma once
 /**
- * 辅助修复页 —— 接入 Claude / Codex / DeepSeek API 进行代码诊断与修复。
+ * 辅助修复页 —— 接入 DeepSeek API 进行代码诊断与修复。
  *
  * 功能：
- *   - 多模型选择（Claude Opus/Sonnet/Haiku、Codex、DeepSeek）
  *   - 文件上下文注入（读取项目文件作为诊断依据）
  *   - 一键应用修复（将 AI 生成的 patch 写入文件）
  *   - 聊天式交互，Markdown 渲染回复
@@ -36,8 +35,7 @@ private:
     void appendAiMessage(const QString &html);
     void appendSystemMessage(const QString &html);
     QString buildSystemPrompt() const;
-    QJsonObject buildApiRequest(const QString &provider, const QString &model,
-                                const QString &apiKey, const QString &userText) const;
+    QJsonObject buildApiRequest(const QString &model, const QString &userText) const;
     void scrollToBottom();
 
     QTextEdit *m_chatView = nullptr;

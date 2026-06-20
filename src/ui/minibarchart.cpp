@@ -1,4 +1,5 @@
 #include "minibarchart.h"
+#include "theme.h"
 #include <QPainter>
 #include <QPaintEvent>
 #include <QFont>
@@ -18,8 +19,8 @@ void MiniBarChart::paintEvent(QPaintEvent *)
     p.setRenderHint(QPainter::Antialiasing);
 
     // 背景
-    p.fillRect(rect(), QColor(30, 30, 30));
-    p.setPen(QColor(100, 100, 100));
+    p.fillRect(rect(), QColor(Theme::BgPrimary));
+    p.setPen(QColor(Theme::Border));
     p.drawRect(rect().adjusted(0, 0, -1, -1));
 
     const int leftPad = 80, rightPad = 50, topPad = 30, bottomPad = 10;
@@ -27,7 +28,7 @@ void MiniBarChart::paintEvent(QPaintEvent *)
     const int chartH = height() - topPad - bottomPad;
 
     if (m_bars.isEmpty()) {
-        p.setPen(QColor(136, 136, 136));
+        p.setPen(QColor(Theme::TextMuted));
         p.setFont(QFont("Segoe UI", 11));
         p.drawText(rect(), Qt::AlignCenter, "暂无数据");
         return;
@@ -35,7 +36,7 @@ void MiniBarChart::paintEvent(QPaintEvent *)
 
     // 标题
     if (!m_title.isEmpty()) {
-        p.setPen(QColor(204, 204, 204));
+        p.setPen(QColor(Theme::TextPrimary));
         p.setFont(QFont("Segoe UI", 10, QFont::Bold));
         p.drawText(leftPad, 5, chartW, 20, Qt::AlignLeft, m_title);
     }
@@ -51,7 +52,7 @@ void MiniBarChart::paintEvent(QPaintEvent *)
     const int startY = topPad;
 
     // Y 轴标签 + 网格线
-    p.setPen(QColor(100, 100, 100));
+    p.setPen(QColor(Theme::Border));
     p.setFont(QFont("Segoe UI", 8));
 
     // 柱状图
@@ -62,7 +63,7 @@ void MiniBarChart::paintEvent(QPaintEvent *)
         if (barW < 2) barW = 2;
 
         // 标签（左）
-        p.setPen(QColor(170, 170, 170));
+        p.setPen(QColor(Theme::TextSecondary));
         p.setFont(QFont("Segoe UI", 9));
         QRect labelRect(0, y, leftPad - 8, barH);
         p.drawText(labelRect, Qt::AlignRight | Qt::AlignVCenter, b.label);
@@ -73,7 +74,7 @@ void MiniBarChart::paintEvent(QPaintEvent *)
         p.drawRoundedRect(leftPad, y, barW, barH, 3, 3);
 
         // 数值标注
-        p.setPen(QColor(220, 220, 220));
+        p.setPen(QColor(Theme::TextPrimary));
         p.setFont(QFont("Consolas", 8));
         QString valText = QString::number(b.value, 'f', b.value >= 100 ? 0 : 1);
         p.drawText(leftPad + barW + 6, y, rightPad - 10, barH,

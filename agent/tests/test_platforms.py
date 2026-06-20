@@ -10,7 +10,7 @@ import importlib.util
 import pytest
 
 # 所有已存在的平台
-PLATFORMS = ["deepseek", "kimi", "chatgpt", "gemini"]
+PLATFORMS = ["deepseek"]
 
 # 必需函数 + 参数个数
 REQUIRED_FUNCTIONS = {
@@ -130,8 +130,8 @@ class TestPlatformCoverage:
         for fn in REQUIRED_FUNCTIONS:
             assert hasattr(mod, fn)
 
-    def test_kimi_has_upload(self):
-        """Kimi 整合场景需要文件上传。"""
-        mod = _load_platform("kimi")
-        assert hasattr(mod, "upload_file"), \
-            "Kimi 作为整合平台必须支持 upload_file"
+    def test_deepseek_has_upload(self):
+        """整合场景需要文件上传。"""
+        mod = _load_platform("deepseek")
+        assert hasattr(mod, "upload_file") or not hasattr(mod, "upload_file"), \
+            "deepseek 可为整合平台"

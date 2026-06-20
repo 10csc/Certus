@@ -57,27 +57,23 @@ class CacheStore:
     # 搜索报告缓存
     # ============================================================
 
-    def query_cache(self, query, project="", top_k=5,
+    def query_cache(self, query, top_k=5,
                     min_similarity=MIN_SIMILARITY):
         """语义搜索历史报告。返回高相似度匹配列表。
 
         Args:
             query: 搜索问题
-            project: 项目名过滤（空则不过滤）
             top_k: 返回最大条数
             min_similarity: 最低相似度阈值
 
         Returns:
             list[dict]: 匹配列表，每项含 query/similarity/report_path/created_at 等
         """
-        where_filter = None
-        if project:
-            where_filter = {"project": project}
 
         results = self._reports.query(
             query_texts=[query],
             n_results=top_k,
-            where=where_filter,
+            where=None,
             include=["documents", "metadatas", "distances"],
         )
 

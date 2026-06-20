@@ -77,6 +77,14 @@ def plan(user_query, depth="L2", project_context=None):
     kp = get_synthesis_platform()
     sub_questions = []
 
+    # 查询重构：将用户原始输入优化为适合搜索的结构化问题
+    from prompt_builder import refine_query
+    raw_query = user_query
+    refined = refine_query(user_query)
+    if refined != user_query:
+        print(f"[Planner] 查询重构: {refined[:80]}...")
+    user_query = refined
+
     if depth == "L2":
         sub_questions.append({
             "question": user_query,
@@ -111,7 +119,7 @@ def plan(user_query, depth="L2", project_context=None):
     decomposed = len(sub_questions) > 2
 
     return {
-        "original_query": user_query,
+        "original_query": raw_query,
         "project_context": project_context,
         "depth": depth,
         "sub_questions": sub_questions,

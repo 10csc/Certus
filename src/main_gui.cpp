@@ -5,7 +5,10 @@
  */
 
 #include <QApplication>
+#include <QDateTime>
 #include <QDir>
+#include <QFile>
+#include <QIcon>
 #include <QMessageBox>
 
 #include <windows.h>
@@ -35,49 +38,95 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setApplicationName("Certus");
     app.setApplicationVersion("0.3.0");
-    app.setStyle("Fusion");  // 暗色主题基础
+    app.setStyle("Fusion");
 
-    // 暗色调色板
-    QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor(30, 30, 30));
-    darkPalette.setColor(QPalette::WindowText, QColor(204, 204, 204));
-    darkPalette.setColor(QPalette::Base, QColor(25, 25, 25));
-    darkPalette.setColor(QPalette::AlternateBase, QColor(35, 35, 35));
-    darkPalette.setColor(QPalette::ToolTipBase, QColor(45, 45, 45));
-    darkPalette.setColor(QPalette::ToolTipText, QColor(204, 204, 204));
-    darkPalette.setColor(QPalette::Text, QColor(204, 204, 204));
-    darkPalette.setColor(QPalette::Button, QColor(35, 35, 35));
-    darkPalette.setColor(QPalette::ButtonText, QColor(204, 204, 204));
-    darkPalette.setColor(QPalette::BrightText, QColor(255, 0, 0));
-    darkPalette.setColor(QPalette::Link, QColor(79, 195, 247));
-    darkPalette.setColor(QPalette::Highlight, QColor(0, 120, 212));
-    darkPalette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
-    app.setPalette(darkPalette);
-    app.setStyleSheet(globalStyleSheet());  // 加载全局 QSS 主题
-
-    // 初始化日志系统（路径相对于 exe 目录，兼容任意启动位置）
+    // 初始化日志系统（必须在 qInstallMessageHandler 之前）
     QString logDir = QCoreApplication::applicationDirPath() + "/logs";
     Logger::instance()->setLogDir(logDir);
+
+    // 安装 Qt 消息处理器：将 qWarning/qCritical/qDebug 写入日志文件
+    // 解决根目录 exe 找不到 SQLite 插件时静默失败的问题
+    qInstallMessageHandler([](QtMsgType type, const QMessageLogContext &ctx,
+                              const QString &msg) {
+        Logger::Level level;
+        const char *label;
+        switch (type) {
+        case QtDebugMsg:   level = Logger::Debug;   label = "DBG";  break;
+        case QtInfoMsg:    level = Logger::Info;    label = "INF";  break;
+        case QtWarningMsg: level = Logger::Warning; label = "WRN";  break;
+        case QtCriticalMsg:level = Logger::Error;   label = "ERR";  break;
+        case QtFatalMsg:   level = Logger::Error;   label = "FATAL";break;
+        default:           level = Logger::Debug;   label = "???";  break;
+        }
+        Logger::instance()->log(level, "Qt", "%s: %s", label, msg.toUtf8().constData());
+    });
+
+    // 亮色调色板
+    QPalette lightPalette;
+    lightPalette.setColor(QPalette::Window, QColor(250, 250, 250));
+    lightPalette.setColor(QPalette::WindowText, QColor(26, 26, 26));
+    lightPalette.setColor(QPalette::Base, QColor(255, 255, 255));
+    lightPalette.setColor(QPalette::AlternateBase, QColor(240, 240, 240));
+    lightPalette.setColor(QPalette::ToolTipBase, QColor(255, 255, 255));
+    lightPalette.setColor(QPalette::ToolTipText, QColor(26, 26, 26));
+    lightPalette.setColor(QPalette::Text, QColor(26, 26, 26));
+    lightPalette.setColor(QPalette::Button, QColor(240, 240, 240));
+    lightPalette.setColor(QPalette::ButtonText, QColor(26, 26, 26));
+    lightPalette.setColor(QPalette::BrightText, QColor(255, 0, 0));
+    lightPalette.setColor(QPalette::Link, QColor(37, 99, 235));
+    lightPalette.setColor(QPalette::Highlight, QColor(37, 99, 235));
+    lightPalette.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+    app.setPalette(lightPalette);
+    app.setStyleSheet(globalStyleSheet());  // 加载全局 QSS 主题
+
+    auto t0 = QDateTime::currentMSecsSinceEpoch();
     LOG_INFO("main", "Certus GUI 启动 v%s", app.applicationVersion().toUtf8().constData());
 
-    // 数据库路径：从 exe 向上找项目根目录（兼容 build/Release 和安装目录）
-    QString dbPath;
-    QDir baseDir(QCoreApplication::applicationDirPath());
-    for (int up = 0; up <= 2; up++) {
-        QString candidate = QDir::cleanPath(baseDir.absolutePath() + "/data/certus.db");
-        if (QFile::exists(candidate)) {
-            dbPath = candidate;
+    // 定位项目根目录：向上查找含 agent/agent.py 的目录
+    QDir projectRoot(QCoreApplication::applicationDirPath());
+    for (int up = 0; up <= 3; up++) {
+        if (QFile::exists(projectRoot.absolutePath() + "/agent/agent.py")) {
             break;
         }
-        if (!baseDir.cdUp()) break;
+        if (!projectRoot.cdUp()) {
+            // 找不到则回退到 exe 所在目录
+            projectRoot = QDir(QCoreApplication::applicationDirPath());
+            break;
+        }
     }
-    if (dbPath.isEmpty()) {
-        dbPath = QDir::currentPath() + "/data/certus.db";  // 兜底
+    QString dbPath = QDir::cleanPath(projectRoot.absolutePath() + "/data/certus.db");
+    // 也检查当前工作目录（开发时可能直接 cd 到项目根启动）
+    QString cwdDbPath = QDir::currentPath() + "/data/certus.db";
+    if (QFile::exists(cwdDbPath) && cwdDbPath != dbPath && !QFile::exists(dbPath)) {
+        dbPath = cwdDbPath;
     }
+
+    // 设置应用图标
+    QString iconPath = projectRoot.absolutePath() + "/resources/certus.png";
+    if (QFile::exists(iconPath)) {
+        app.setWindowIcon(QIcon(iconPath));
+    }
+
+    auto t1 = QDateTime::currentMSecsSinceEpoch();
+    LOG_INFO("main", "DB path resolve: %lld ms", t1 - t0);
+
     Database db(dbPath);
     if (!db.open()) {
-        qWarning() << "无法打开数据库，部分功能不可用";
+        LOG_ERROR("main", "数据库打开失败: %s", dbPath.toUtf8().constData());
+        QMessageBox::critical(nullptr, "Certus — 数据库错误",
+            QString("无法打开或创建数据库文件:\n\n%1\n\n"
+                    "可能原因:\n"
+                    "1. exe 所在目录缺少 Qt SQLite 插件 (sqldrivers/qsqlite.dll)\n"
+                    "2. 磁盘空间不足或 data 目录无写入权限\n\n"
+                    "请从 build/Release/ 目录启动，或运行部署脚本。")
+                .arg(dbPath));
+        return 1;
     }
+
+    LOG_INFO("main", "数据库已打开: %s", dbPath.toUtf8().constData());
+
+    auto t2 = QDateTime::currentMSecsSinceEpoch();
+    LOG_INFO("main", "DB open: %lld ms", t2 - t1);
 
     // 启动时崩溃检测：session_state 残留 running → 上次异常退出
     Database::SessionStatus status = db.getSessionStatus();
@@ -101,23 +150,12 @@ int main(int argc, char *argv[])
     AgentManager agent;
     agent.setDatabase(&db);
 
-    // Agent 目录：从 exe 位置向上查找，兼容 build/Release 和安装目录
-    QString agentDir;
-    QDir agentBaseDir(QCoreApplication::applicationDirPath());
-    // 尝试: exe同级/agent → 上1级/agent → 上2级/agent（build/Release → 项目根）
-    for (int up = 0; up <= 2; up++) {
-        QString candidate = QDir::cleanPath(agentBaseDir.absolutePath() + "/agent");
-        if (QFile::exists(candidate + "/agent.py")) {
-            agentDir = candidate;
-            break;
-        }
-        if (!agentBaseDir.cdUp()) break;
-    }
-    if (agentDir.isEmpty()) {
-        agentDir = QDir::currentPath() + "/agent";  // 兜底
-    }
+    // Agent 目录：复用上面定位的 projectRoot
+    QString agentDir = QDir::cleanPath(projectRoot.absolutePath() + "/agent");
     agent.setAgentDir(QDir::cleanPath(agentDir));
-    agent.setPythonPath("python");
+    agent.setPythonPath(db.loadConfig("python_path", "python"));
+    // data_dir：从 agentDir 推导项目根（agentDir 以 /agent 结尾），保证路径与 Python DATA_DIR 一致
+    agent.setDataDir(QDir::cleanPath(agentDir + "/../data"));
 
     // 自动启动浏览器（如果用户开启了自启动）
     if (db.loadConfig("auto_launch_browser", "0") == "1") {
@@ -125,13 +163,25 @@ int main(int argc, char *argv[])
         browser.launch(port);
     }
 
+    auto t3 = QDateTime::currentMSecsSinceEpoch();
+    LOG_INFO("main", "Browser+Agent init: %lld ms", t3 - t2);
+
     // 主窗口
     MainWindow window;
+    auto t4 = QDateTime::currentMSecsSinceEpoch();
+    LOG_INFO("main", "MainWindow ctor: %lld ms", t4 - t3);
+
     window.setDatabase(&db);
     window.setAgentManager(&agent);
     window.setBrowserManager(&browser);
-    window.setMemoryConfig("python", agentDir);
+    window.setMemoryConfig(db.loadConfig("python_path", "python"), agentDir);
+    auto t5 = QDateTime::currentMSecsSinceEpoch();
+    LOG_INFO("main", "Window set*: %lld ms", t5 - t4);
+
     window.show();
+    auto t6 = QDateTime::currentMSecsSinceEpoch();
+    LOG_INFO("main", "Window show: %lld ms", t6 - t5);
+    LOG_INFO("main", "启动总耗时: %lld ms", t6 - t0);
 
     return app.exec();
 }

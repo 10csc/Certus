@@ -1,4 +1,5 @@
 #include "browsermanager.h"
+#include <QCoreApplication>
 #include <QDebug>
 #include <QFile>
 #include <QUrl>
@@ -158,6 +159,7 @@ int BrowserManager::launch(int port, BrowserType type)
     // 等待 CDP 就绪（浏览器冷启动最多等 20s）
     for (int i = 0; i < 20; i++) {
         Sleep(1000);
+        QCoreApplication::processEvents();
         if (isCdpAvailable(usePort)) {
             qInfo() << "[Browser] CDP" << usePort << "就绪";
             emit browserLaunched(usePort);

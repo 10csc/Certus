@@ -168,25 +168,27 @@ def handshake(protocol_version=SUPPORTED_PROTOCOL, timeout=10.0):
 
     返回: config dict（从 hello 中提取）
     """
+    print("[Handshake] 等待 C++ hello...", file=sys.stderr)
     # 读取 hello 帧（sys.stdin.buffer.read() 在管道模式下会阻塞等待数据）
     hello = _read_hello_frame(timeout)
 
     if hello is None:
         print(
-            json.dumps({
-                "event": "error",
-                "seq": _next_seq(),
-                "timestamp": time.time(),
-                "error_type": "handshake_timeout",
-                "detail": f"等待 hello 超时 ({timeout}s)",
-            }, ensure_ascii=False),
+            f"[Handshake] 等待 hello 超时 ({timeout}s)，stdin 可能无数据",
             file=sys.stderr,
         )
+        # 也写到 stdout（C++ 可能能看到）
+        write_frame("error", error_type="handshake_timeout",
+                    detail=f"等待 hello 超时 ({timeout}s)")
         sys.exit(1)
+
+    print(f"[Handshake] 收到 hello | action={hello.get('action')} | "
+          f"protocol={hello.get('protocol')} | mode={hello.get('mode')}",
+          file=sys.stderr)
 
     if hello.get("action") != "hello":
         print(
-            f"[PROTOCOL] 首帧不是 hello: {hello.get('action', '?')}",
+            f"[Handshake] 首帧不是 hello: {hello.get('action', '?')}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -199,7 +201,7 @@ def handshake(protocol_version=SUPPORTED_PROTOCOL, timeout=10.0):
                      detail=f"协议版本不匹配: C++={remote_version} Python={protocol_version}",
                      agent_version=_get_agent_version())
         print(
-            f"[PROTOCOL] 协议版本不匹配: C++={remote_version} != Python={protocol_version}",
+            f"[Handshake] 协议版本不匹配: C++={remote_version} != Python={protocol_version}",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -212,6 +214,8 @@ def handshake(protocol_version=SUPPORTED_PROTOCOL, timeout=10.0):
     write_frame("hello_ack",
                 protocol=protocol_version,
                 agent_version=_get_agent_version())
+    print(f"[Handshake] hello_ack 已发送 | agent_version={_get_agent_version()}",
+          file=sys.stderr)
 
     return config, mode
 
@@ -237,9 +241,13 @@ def _read_hello_frame(timeout):
     """
     # 先尝试长度前缀帧读取
     try:
+        print("[Handshake] 读取 stdin 前缀帧...", file=sys.stderr)
         prefix_bytes = sys.stdin.buffer.read(4)
         if not prefix_bytes or len(prefix_bytes) < 4:
+            print(f"[Handshake] stdin 读取返回空（管道关闭?）len={len(prefix_bytes) if prefix_bytes else 0}",
+                  file=sys.stderr)
             return None
+        print(f"[Handshake] 收到 4 字节前缀", file=sys.stderr)
 
         data_len = struct.unpack(">I", prefix_bytes)[0]
         if 0 < data_len <= 10 * 1024 * 1024:
@@ -271,33 +279,10 @@ def _read_hello_frame(timeout):
     return None
 
 
-# ============================================================
-# 控制指令处理
-# ============================================================
-
 # 取消标记（agent.py 和 orchestrator 共享）
 cancel_flag = threading.Event()
 # 心跳 ping 标记
 ping_received = threading.Event()
-
-
-def handle_control_frame(frame):
-    """处理 C++ 发来的控制指令。在 stdin 监听线程中调用。
-
-    返回 True 表示正常，False 表示流结束。
-    """
-    action = frame.get("action", "")
-    if action == "cancel":
-        cancel_flag.set()
-        print("[CTRL] 收到取消指令", file=sys.stderr)
-    elif action == "ping":
-        ping_received.set()
-        write_frame("pong")
-    else:
-        # 未知指令：忽略（向前兼容）
-        print(f"[CTRL] 未知指令: {action}", file=sys.stderr)
-    return True
-
 
 # ============================================================
 # 便捷函数

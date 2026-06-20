@@ -101,7 +101,7 @@ class TestCrossValidate:
         url = "https://docs.python.org/3.13/"
         results = [
             {"platform": "deepseek", "content": f"参考 {url}", "content_len": 200, "gaps": [], "links": [url]},
-            {"platform": "kimi", "content": f"详见 {url}", "content_len": 200, "gaps": [], "links": [url]},
+            {"platform": "deepseek", "content": f"详见 {url}", "content_len": 200, "gaps": [], "links": [url]},
         ]
         v = cross_validate(results)
         assert v["level"] == "cross_validated"
@@ -111,7 +111,7 @@ class TestCrossValidate:
     def test_two_sources_no_overlap(self):
         results = [
             {"platform": "deepseek", "content": "A", "content_len": 200, "gaps": [], "links": ["https://a.com/"]},
-            {"platform": "kimi", "content": "B", "content_len": 200, "gaps": [], "links": ["https://b.com/"]},
+            {"platform": "deepseek", "content": "B", "content_len": 200, "gaps": [], "links": ["https://b.com/"]},
         ]
         v = cross_validate(results)
         assert v["level"] == "multi_source_no_overlap"
@@ -138,7 +138,7 @@ class TestGenerateReport:
         assert "信源" not in report or "来源" in report  # 有来源分析
 
     def test_report_with_no_content(self):
-        results = [{"platform": "gemini", "content": "", "content_len": 0, "gaps": [], "links": [], "error": "超时"}]
+        results = [{"platform": "deepseek", "content": "", "content_len": 0, "gaps": [], "links": [], "error": "超时"}]
         validation = {"level": "single_source", "confidence": "低"}
         report = generate_report("失败查询", results, validation)
         assert "未获取到结果" in report

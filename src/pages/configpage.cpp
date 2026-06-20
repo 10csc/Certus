@@ -5,7 +5,6 @@
 #include "../core/browsermanager.h"
 #include "../ui/theme.h"
 #include "../ui/toast.h"
-#include <QSet>
 #include <QMessageBox>
 #include <QProcess>
 #include <QDir>
@@ -15,16 +14,12 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QFile>
-#include <QDir>
 #include <QFileInfo>
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QMessageBox>
-#include <QHeaderView>
 #include <QTimer>
-#include <QProcess>
 
 ConfigPage::ConfigPage(QWidget *parent) : QWidget(parent)
 {
@@ -35,19 +30,8 @@ void ConfigPage::setDatabase(Database *db)
 {
     m_db = db;
     loadConfigFromSQLite();
+    refreshSearchPlatformDropdowns();
     onLoadConfig();
-    refreshProjectList();
-
-    // 载入平台 URL
-    QJsonObject urls = m_configJson["platform_urls"].toObject();
-    QStringList keys = urls.keys();
-    m_platformTable->setRowCount(keys.size());
-    for (int i = 0; i < keys.size(); i++) {
-        m_platformTable->setItem(i, 0, new QTableWidgetItem(keys[i]));
-        m_platformTable->setItem(i, 1, new QTableWidgetItem(urls[keys[i]].toString()));
-    }
-    // 刷新定型下拉框
-    refreshTypingDropdown();
 }
 
 void ConfigPage::setBrowserManager(BrowserManager *bm)
@@ -67,12 +51,15 @@ void ConfigPage::onLaunchBrowser()
         Toast::show("浏览器已在运行中", Toast::Info, this);
         return;
     }
-    // 先持久化端口，确保 SearchPage 能读取到最新值
     if (m_db) m_db->saveConfig("cdp_port", QString::number(port));
+    m_envStatus->setText(QString("<span style='color:%1;'>● 正在启动浏览器 (端口 %2)...</span>").arg(Theme::Info).arg(port));
+    QCoreApplication::processEvents();
     int result = m_browser->launch(port);
     if (result > 0) {
+        m_envStatus->setText(QString("<span style='color:%1;'>✓ 浏览器已就绪 (端口 %2)</span>").arg(Theme::Green).arg(result));
         Toast::show(QString("浏览器已在端口 %1 启动").arg(result), Toast::Success, this);
     } else {
+        m_envStatus->setText(QString("<span style='color:%1;'>✗ 浏览器启动失败 (端口 %2)</span>").arg(Theme::Error).arg(port));
         Toast::show(QString("浏览器 CDP 端口 %1 未就绪").arg(port), Toast::Error, this);
     }
 }
@@ -85,10 +72,8 @@ bool ConfigPage::loadConfigFromSQLite()
 {
     if (!m_db) return false;
 
-    // 确保 SQLite 中有默认配置（首次启动 seed）
     m_db->seedDefaultConfig();
 
-    // 从 SQLite 加载到 m_configJson（供 UI 显示）
     auto loadJson = [&](const QString &key, const QString &def) -> QJsonObject {
         QString val = m_db->loadConfig(key, def);
         QJsonDocument doc = QJsonDocument::fromJson(val.toUtf8());
@@ -97,16 +82,13 @@ bool ConfigPage::loadConfigFromSQLite()
 
     m_configJson = QJsonObject{};
     m_configJson["platform_urls"] = loadJson("platform_urls",
-        R"({"deepseek":"https://chat.deepseek.com/","kimi":"https://www.kimi.com/","chatgpt":"https://chatgpt.com/","gemini":"https://gemini.google.com/"})");
+        R"({"deepseek":"https://chat.deepseek.com/"})");
     m_configJson["chat_path_patterns"] = loadJson("chat_path_patterns",
-        R"({"deepseek":["/a/chat/s/"],"kimi":["/chat/"],"chatgpt":["/c/"],"gemini":["/app/"]})");
-    m_configJson["sessions"] = loadJson("sessions", "{}");
-    m_configJson["current_project"] = m_db->loadConfig("current_project", "");
+        R"({"deepseek":["/a/chat/s/"]})");
     m_configJson["cdp_port"] = m_db->loadConfig("cdp_port", "9223").toInt();
     m_configJson["search_platform"] = m_db->loadConfig("search_platform", "deepseek");
-    m_configJson["synthesis_platform"] = m_db->loadConfig("synthesis_platform", "kimi");
+    m_configJson["synthesis_platform"] = m_db->loadConfig("synthesis_platform", "deepseek");
     m_configJson["deepseek_api"] = m_db->loadConfig("deepseek_api", "https://api.deepseek.com/v1");
-    m_configJson["session_mode"] = m_db->loadConfig("session_mode", "fixed");
 
     return true;
 }
@@ -118,19 +100,9 @@ bool ConfigPage::loadConfigFromSQLite()
 void ConfigPage::setupUi()
 {
     auto *layout = new QVBoxLayout(this);
-    m_tabs = new QTabWidget(this);
+    layout->setContentsMargins(16, 16, 16, 16);
 
-    setupGeneralTab(m_tabs);
-    setupProjectTab(m_tabs);
-    setupPlatformTab(m_tabs);
-
-    layout->addWidget(m_tabs);
-}
-
-void ConfigPage::setupGeneralTab(QTabWidget *tabs)
-{
-    auto *tab = new QWidget();
-    auto *form = new QFormLayout(tab);
+    auto *form = new QFormLayout();
     form->setSpacing(16);
 
     auto *cdpRow = new QHBoxLayout();
@@ -152,30 +124,10 @@ void ConfigPage::setupGeneralTab(QTabWidget *tabs)
     m_apiUrl = new QLineEdit("https://api.deepseek.com/v1", this);
     form->addRow("API 端点:", m_apiUrl);
 
-    // Claude API Key（用于辅助修复页）
-    m_claudeKey = new QLineEdit(this);
-    m_claudeKey->setEchoMode(QLineEdit::Password);
-    m_claudeKey->setPlaceholderText("sk-ant-... (Anthropic Console 获取)");
-    form->addRow("Claude Key:", m_claudeKey);
-    m_claudeKeyStatus = new QLabel("未配置", this);
-    m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
-    form->addRow("", m_claudeKeyStatus);
-
-    // Codex / OpenAI Key（用于辅助修复页）
-    m_codexKey = new QLineEdit(this);
-    m_codexKey->setEchoMode(QLineEdit::Password);
-    m_codexKey->setPlaceholderText("sk-... (OpenAI Platform 获取)");
-    form->addRow("Codex Key:", m_codexKey);
-    m_codexKeyStatus = new QLabel("未配置", this);
-    m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
-    form->addRow("", m_codexKeyStatus);
-
     m_defaultSearchPlatform = new QComboBox(this);
-    m_defaultSearchPlatform->addItems({"deepseek", "kimi", "chatgpt", "gemini"});
     form->addRow("默认搜索平台:", m_defaultSearchPlatform);
 
     m_defaultSynthesisPlatform = new QComboBox(this);
-    m_defaultSynthesisPlatform->addItems({"kimi", "deepseek", "chatgpt", "gemini"});
     form->addRow("默认整合平台:", m_defaultSynthesisPlatform);
 
     auto *saveBtn = new QPushButton("保存配置", this);
@@ -210,345 +162,8 @@ void ConfigPage::setupGeneralTab(QTabWidget *tabs)
             this, &ConfigPage::onLogLevelChanged);
     form->addRow("日志级别:", m_logLevelCombo);
 
-    // === 平台健康面板 ===
-    auto *healthGroup = new QGroupBox("平台状态", this);
-    auto *healthLayout = new QFormLayout(healthGroup);
-    healthLayout->setSpacing(4);
-
-    static const char *hNames[] = {"deepseek", "kimi", "chatgpt", "gemini"};
-    QLabel **hLabels[] = {&m_healthDp, &m_healthKi, &m_healthCg, &m_healthGm};
-    for (int i = 0; i < 4; i++) {
-        *hLabels[i] = new QLabel("检测中...", this);
-        (*hLabels[i])->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextMuted));
-        healthLayout->addRow(QString("%1:").arg(hNames[i]), *hLabels[i]);
-    }
-
-    form->addRow(healthGroup);
-
-    // 10 秒刷新一次平台健康状态
-    m_healthTimer = new QTimer(this);
-    connect(m_healthTimer, &QTimer::timeout, this, &ConfigPage::refreshPlatformHealth);
-    m_healthTimer->start(10000);
-
-    // 初始检测
-    QTimer::singleShot(500, this, &ConfigPage::refreshPlatformHealth);
-
-    tabs->addTab(tab, "常规配置");
-}
-
-void ConfigPage::setupProjectTab(QTabWidget *tabs)
-{
-    auto *tab = new QWidget();
-    auto *layout = new QVBoxLayout(tab);
-
-    m_currentProjectLabel = new QLabel("当前项目: (未设置)", this);
-    m_currentProjectLabel->setStyleSheet(QString("color:%1; padding:4px;").arg(Theme::Info));
-    layout->addWidget(m_currentProjectLabel);
-
-    // 新增行
-    auto *row = new QHBoxLayout();
-    m_newProjectName = new QLineEdit(this);
-    m_newProjectName->setPlaceholderText("输入新项目名称...");
-    auto *addBtn = new QPushButton("新增", this);
-    addBtn->setProperty("cssClass", "primary");
-    connect(addBtn, &QPushButton::clicked, this, &ConfigPage::onAddProject);
-    row->addWidget(m_newProjectName, 1);
-    row->addWidget(addBtn);
-    layout->addLayout(row);
-
-    // 项目列表
-    m_projectList = new QListWidget(this);
-    m_projectList->setMaximumHeight(120);
-    connect(m_projectList, &QListWidget::itemClicked,
-            this, &ConfigPage::onProjectSelected);
-    layout->addWidget(m_projectList);
-
-    // 操作按钮
-    auto *btnRow = new QHBoxLayout();
-    auto *delBtn = new QPushButton("删除选中", this);
-    auto *setCurBtn = new QPushButton("设为当前", this);
-    delBtn->setProperty("cssClass", "danger");
-    connect(delBtn, &QPushButton::clicked, this, &ConfigPage::onDeleteProject);
-    connect(setCurBtn, &QPushButton::clicked, this, &ConfigPage::onSetCurrentProject);
-    btnRow->addWidget(delBtn);
-    btnRow->addWidget(setCurBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    // 平台链接编辑区
-    m_sessionUrlArea = new QWidget(this);
-    auto *sessLayout = new QVBoxLayout(m_sessionUrlArea);
-    sessLayout->setContentsMargins(0, 8, 0, 0);
-    auto *sessTitle = new QLabel("选中项目后编辑各平台会话链接:", this);
-    sessTitle->setStyleSheet(QString("color:%1; font-size:11px;").arg(Theme::TextMuted));
-    sessLayout->addWidget(sessTitle);
-    auto *sessForm = new QFormLayout();
-    sessForm->setSpacing(6);
-    sessLayout->addLayout(sessForm);
-    // 占位：实际平台输入框在 onProjectSelected 中动态创建
-    sessLayout->addStretch();
-    layout->addWidget(m_sessionUrlArea);
-
-    tabs->addTab(tab, "项目管理");
-}
-
-void ConfigPage::setupPlatformTab(QTabWidget *tabs)
-{
-    auto *tab = new QWidget();
-    auto *layout = new QVBoxLayout(tab);
-
-    // 操作按钮行
-    auto *btnRow = new QHBoxLayout();
-    auto *addPlatBtn = new QPushButton("+ 新增平台", this);
-    addPlatBtn->setProperty("cssClass", "success");
-    connect(addPlatBtn, &QPushButton::clicked, this, [this]() {
-        int row = m_platformTable->rowCount();
-        m_platformTable->insertRow(row);
-        m_platformTable->setItem(row, 0, new QTableWidgetItem("新平台"));
-        m_platformTable->setItem(row, 1, new QTableWidgetItem("https://"));
-        refreshTypingDropdown();
-    });
-    btnRow->addWidget(addPlatBtn);
-
-    auto *delPlatBtn = new QPushButton("− 删除选中", this);
-    delPlatBtn->setProperty("cssClass", "danger");
-    connect(delPlatBtn, &QPushButton::clicked, this, [this]() {
-        int row = m_platformTable->currentRow();
-        if (row >= 0) {
-            QString name = m_platformTable->item(row, 0)
-                ? m_platformTable->item(row, 0)->text() : "?";
-            auto answer = QMessageBox::question(this, "确认删除",
-                QString("确定删除平台「%1」吗？\n此操作不可恢复。").arg(name));
-            if (answer == QMessageBox::Yes) {
-                m_platformTable->removeRow(row);
-                refreshTypingDropdown();
-            }
-        } else {
-            Toast::show("请先选中要删除的平台行", Toast::Info, this);
-        }
-    });
-    btnRow->addWidget(delPlatBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    // 平台表格
-    m_platformTable = new QTableWidget(0, 2, this);
-    m_platformTable->setHorizontalHeaderLabels({"平台名称", "平台URL"});
-    m_platformTable->horizontalHeader()->setStretchLastSection(true);
-    m_platformTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    layout->addWidget(m_platformTable, 1);
-
-    auto *saveBtn = new QPushButton("保存平台配置", this);
-    saveBtn->setProperty("cssClass", "primary");
-    connect(saveBtn, &QPushButton::clicked, this, [this]() {
-        onSavePlatforms();
-        refreshTypingDropdown();
-    });
-    layout->addWidget(saveBtn);
-
-    // 平台定型区
-    auto *typingGroup = new QGroupBox("平台定型", this);
-    auto *typingForm = new QFormLayout(typingGroup);
-    m_typingPlatform = new QComboBox(this);
-    typingForm->addRow("目标平台:", m_typingPlatform);
-
-    m_typingText = new QCheckBox("文字收发定型", this);
-    m_typingText->setChecked(true);
-    typingForm->addRow("", m_typingText);
-    m_typingFile = new QCheckBox("文件上传定型", this);
-    typingForm->addRow("", m_typingFile);
-
-    m_typingBtn = new QPushButton("开始定型", this);
-    m_typingBtn->setProperty("cssClass", "primary");
-    connect(m_typingBtn, &QPushButton::clicked, this, &ConfigPage::onStartTyping);
-    typingForm->addRow("", m_typingBtn);
-
-    m_typingStatus = new QLabel("未定型", this);
-    m_typingStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::TextMuted));
-    typingForm->addRow("状态:", m_typingStatus);
-    layout->addWidget(typingGroup);
-
-    tabs->addTab(tab, "平台注册");
-}
-
-// ============================================================
-// 项目操作
-// ============================================================
-
-void ConfigPage::refreshProjectList()
-{
-    m_projectList->clear();
-    QJsonObject sessions = m_configJson["sessions"].toObject();
-    for (const auto &key : sessions.keys()) {
-        m_projectList->addItem(key);
-    }
-    QString current = m_configJson["current_project"].toString();
-    m_currentProjectLabel->setText(
-        QString("当前项目: %1").arg(current.isEmpty() ? "(未设置)" : current));
-    // 同步到 SQLite（SearchPage / AgentManager 读取用）
-    if (m_db && !current.isEmpty())
-        m_db->saveConfig("current_project", current);
-}
-
-void ConfigPage::onProjectSelected(QListWidgetItem *item)
-{
-    if (!item) return;
-    QString project = item->text();
-
-    // 清空旧输入框
-    m_sessionEdits.clear();
-    QFormLayout *form = nullptr;
-    // 找到 m_sessionUrlArea 中的 QFormLayout
-    for (auto *child : m_sessionUrlArea->children()) {
-        auto *lay = qobject_cast<QVBoxLayout *>(child);
-        if (lay) {
-            for (int i = 0; i < lay->count(); i++) {
-                auto *item = lay->itemAt(i);
-                if (item && item->layout()) {
-                    form = qobject_cast<QFormLayout *>(item->layout());
-                    break;
-                }
-            }
-        }
-    }
-
-    // 清除旧行
-    if (form) {
-        while (form->rowCount() > 0)
-            form->removeRow(0);
-    }
-
-    // 读取当前项目的会话链接
-    QJsonObject sessions = m_configJson["sessions"].toObject();
-    QJsonObject projSessions = sessions[project].toObject();
-    QJsonObject platformUrls = m_configJson["platform_urls"].toObject();
-
-    // 为每个注册平台创建输入框
-    for (const auto &key : platformUrls.keys()) {
-        QString platName = key;
-        QString currentUrl = projSessions[platName].toString();
-        auto *edit = new QLineEdit(currentUrl, m_sessionUrlArea);
-        edit->setPlaceholderText(QString("输入 %1 的聊天链接...").arg(platName));
-        m_sessionEdits[platName] = edit;
-        if (form)
-            form->addRow(QString("%1:").arg(platName), edit);
-    }
-
-    // 添加保存按钮
-    if (form && !m_sessionEdits.isEmpty()) {
-        auto *saveBtn = new QPushButton("保存会话链接", m_sessionUrlArea);
-        saveBtn->setProperty("cssClass", "primary");
-        connect(saveBtn, &QPushButton::clicked, this, &ConfigPage::onSaveSessionUrls);
-        form->addRow("", saveBtn);
-    }
-}
-
-void ConfigPage::onSaveSessionUrls()
-{
-    auto *item = m_projectList->currentItem();
-    if (!item) return;
-    QString project = item->text();
-
-    QJsonObject sessions = m_configJson["sessions"].toObject();
-    QJsonObject projSessions = sessions[project].toObject();
-
-    for (auto it = m_sessionEdits.begin(); it != m_sessionEdits.end(); ++it) {
-        QString url = it.value()->text().trimmed();
-        if (!url.isEmpty()) {
-            projSessions[it.key()] = url;
-        } else {
-            projSessions.remove(it.key());
-        }
-    }
-
-    sessions[project] = projSessions;
-    m_configJson["sessions"] = sessions;
-    // 同步到 SQLite（C++ hello 从此读取）
-    if (m_db) {
-        QJsonDocument sdoc(sessions);
-        m_db->saveConfig("sessions", QString::fromUtf8(sdoc.toJson()));
-    }
-    Toast::show(QString("项目「%1」的会话链接已保存").arg(project), Toast::Success, this);
-}
-
-void ConfigPage::onAddProject()
-{
-    QString name = m_newProjectName->text().trimmed();
-    if (name.isEmpty()) return;
-
-    QJsonObject sessions = m_configJson["sessions"].toObject();
-    if (sessions.contains(name)) {
-        Toast::show("项目已存在", Toast::Warning, this);
-        return;
-    }
-    sessions[name] = QJsonObject{};
-    // 同步到 SQLite
-    if (m_db) {
-        QJsonDocument doc(sessions);
-        m_db->saveConfig("sessions", QString::fromUtf8(doc.toJson()));
-    }
-    m_newProjectName->clear();
-    refreshProjectList();
-}
-
-void ConfigPage::onDeleteProject()
-{
-    auto *item = m_projectList->currentItem();
-    if (!item) return;
-    QString name = item->text();
-
-    auto result = QMessageBox::question(this, "确认删除",
-        QString("确定删除项目「%1」？").arg(name));
-    if (result != QMessageBox::Yes) return;
-
-    QJsonObject sessions = m_configJson["sessions"].toObject();
-    sessions.remove(name);
-
-    // 同步到 SQLite
-    if (m_db) {
-        QJsonDocument doc(sessions);
-        m_db->saveConfig("sessions", QString::fromUtf8(doc.toJson()));
-        if (m_configJson["current_project"].toString() == name)
-            m_db->saveConfig("current_project", "");
-    }
-
-    refreshProjectList();
-}
-
-void ConfigPage::onSetCurrentProject()
-{
-    auto *item = m_projectList->currentItem();
-    if (!item) return;
-    // 同步到 SQLite
-    if (m_db) m_db->saveConfig("current_project", item->text());
-    refreshProjectList();
-}
-
-// ============================================================
-// 平台操作
-// ============================================================
-
-void ConfigPage::onSavePlatforms()
-{
-    QJsonObject urls;
-    for (int i = 0; i < m_platformTable->rowCount(); i++) {
-        auto *nameItem = m_platformTable->item(i, 0);
-        auto *urlItem = m_platformTable->item(i, 1);
-        if (nameItem && urlItem) {
-            QString name = nameItem->text().trimmed();
-            QString url = urlItem->text().trimmed();
-            if (!name.isEmpty() && !url.isEmpty()) {
-                urls[name] = url;
-            }
-        }
-    }
-    m_configJson["platform_urls"] = urls;
-    // 同步到 SQLite（C++ hello 从此读取）
-    if (m_db) {
-        QJsonDocument doc(urls);
-        m_db->saveConfig("platform_urls", QString::fromUtf8(doc.toJson()));
-    }
-    Toast::show("平台配置已保存", Toast::Success, this);
+    layout->addLayout(form);
+    layout->addStretch();
 }
 
 // ============================================================
@@ -564,26 +179,19 @@ void ConfigPage::onSaveConfig()
     m_db->saveConfig("synthesis_platform", m_defaultSynthesisPlatform->currentText());
     m_db->saveConfig("auto_depth", m_autoDepth->isChecked() ? "1" : "0");
     m_db->saveConfig("auto_launch_browser", m_autoLaunchBrowser->isChecked() ? "1" : "0");
-    m_db->saveConfig("session_mode", "fixed");
 
-    // 首次保存时写入 chat_path_patterns 默认值（后续不覆盖用户自定义）
+    // 首次保存时写入 chat_path_patterns 默认值
     if (m_db->loadConfig("chat_path_patterns", "").isEmpty()) {
         QJsonObject patterns;
         { QJsonArray a; a.append(QString("/a/chat/s/")); patterns["deepseek"] = a; }
-        { QJsonArray a; a.append(QString("/chat/")); patterns["kimi"] = a; }
-        { QJsonArray a; a.append(QString("/c/")); patterns["chatgpt"] = a; }
-        { QJsonArray a; a.append(QString("/app/")); patterns["gemini"] = a; }
         QJsonDocument pdoc(patterns);
         m_db->saveConfig("chat_path_patterns", QString::fromUtf8(pdoc.toJson()));
     }
 
-    // 首次保存时写入 platform_urls 默认值（后续不覆盖用户自定义）
+    // 首次保存时写入 platform_urls 默认值
     if (m_db->loadConfig("platform_urls", "").isEmpty()) {
         QJsonObject urls;
         urls["deepseek"] = "https://chat.deepseek.com/";
-        urls["kimi"] = "https://www.kimi.com/";
-        urls["chatgpt"] = "https://chatgpt.com/";
-        urls["gemini"] = "https://gemini.google.com/";
         QJsonDocument udoc(urls);
         m_db->saveConfig("platform_urls", QString::fromUtf8(udoc.toJson()));
     }
@@ -593,55 +201,35 @@ void ConfigPage::onSaveConfig()
         QString encrypted = Crypto::encrypt(apiKey);
         if (!encrypted.isEmpty()) {
             m_db->saveConfig("deepseek_key", encrypted);
-            m_db->saveConfig("deepseek_key_hash", Crypto::sha256Prefix8(apiKey));
-            m_apiKeyStatus->setText("已加密存储 ✓");
+            QString hash = Crypto::sha256Prefix8(apiKey);
+            m_db->saveConfig("deepseek_key_hash", hash);
+            m_apiKeyStatus->setText(QString("已加密存储 (Hash: %1) ✓").arg(hash));
             m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::Success));
             m_apiKey->clear();
+            m_apiKey->setPlaceholderText(QString("已加密存储 — 输入新 Key 可替换 (Hash: %1)").arg(hash));
+        } else {
+            m_apiKeyStatus->setText("加密失败，请重试");
+            m_apiKeyStatus->setStyleSheet(QString("color:%1; font-weight:bold;").arg(Theme::Error));
+            Toast::show("API Key 加密失败，请重试", Toast::Error, this);
+            return;
         }
     }
 
-    // Claude Key
-    QString claudeKey = m_claudeKey->text();
-    if (!claudeKey.isEmpty()) {
-        QString encrypted = Crypto::encrypt(claudeKey);
-        if (!encrypted.isEmpty()) {
-            m_db->saveConfig("claude_key", encrypted);
-            m_db->saveConfig("claude_key_hash", Crypto::sha256Prefix8(claudeKey));
-            m_claudeKeyStatus->setText("已加密存储 ✓");
-            m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::Success));
-            m_claudeKey->clear();
-        }
-    }
-
-    // Codex Key
-    QString codexKey = m_codexKey->text();
-    if (!codexKey.isEmpty()) {
-        QString encrypted = Crypto::encrypt(codexKey);
-        if (!encrypted.isEmpty()) {
-            m_db->saveConfig("codex_key", encrypted);
-            m_db->saveConfig("codex_key_hash", Crypto::sha256Prefix8(codexKey));
-            m_codexKeyStatus->setText("已加密存储 ✓");
-            m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::Success));
-            m_codexKey->clear();
-        }
-    }
-
-    // 反馈
     m_apiKeyStatus->setStyleSheet(QString("color:%1; font-weight:bold;").arg(Theme::Success));
     m_apiKeyStatus->setText("配置已保存 ✓");
-    Toast::show("配置已保存", Toast::Success, this);
+    m_envStatus->setText(QString("<span style='color:%1;'>✓ 配置已保存</span>").arg(Theme::Green));
+    Toast::show("配置已保存 ✓", Toast::Success, this);
     QTimer::singleShot(3000, this, [this]() {
         QString hash = m_db ? m_db->loadConfig("deepseek_key_hash") : QString();
-        m_apiKeyStatus->setText(hash.isEmpty() ? "未配置" : "已配置 ✓");
-        m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(hash.isEmpty() ? Theme::TextMuted : Theme::Success));
-
-        QString claudeHash = m_db ? m_db->loadConfig("claude_key_hash") : QString();
-        m_claudeKeyStatus->setText(claudeHash.isEmpty() ? "未配置" : "已配置 ✓");
-        m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(claudeHash.isEmpty() ? Theme::TextMuted : Theme::Success));
-
-        QString codexHash = m_db ? m_db->loadConfig("codex_key_hash") : QString();
-        m_codexKeyStatus->setText(codexHash.isEmpty() ? "未配置" : "已配置 ✓");
-        m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(codexHash.isEmpty() ? Theme::TextMuted : Theme::Success));
+        if (hash.isEmpty()) {
+            m_apiKeyStatus->setText("未配置");
+            m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
+            m_apiKey->setPlaceholderText("请输入 DeepSeek API Key");
+        } else {
+            m_apiKeyStatus->setText(QString("已配置 (Hash: %1) ✓").arg(hash));
+            m_apiKeyStatus->setStyleSheet(QString("color:%1; font-weight:bold;").arg(Theme::Success));
+            m_apiKey->setPlaceholderText(QString("已加密存储 — 输入新 Key 可替换 (Hash: %1)").arg(hash));
+        }
     });
 }
 
@@ -655,7 +243,7 @@ void ConfigPage::onLoadConfig()
     int spIdx = m_defaultSearchPlatform->findText(searchPlat);
     if (spIdx >= 0) m_defaultSearchPlatform->setCurrentIndex(spIdx);
 
-    QString synthPlat = m_db->loadConfig("synthesis_platform", "kimi");
+    QString synthPlat = m_db->loadConfig("synthesis_platform", "deepseek");
     int kpIdx = m_defaultSynthesisPlatform->findText(synthPlat);
     if (kpIdx >= 0) m_defaultSynthesisPlatform->setCurrentIndex(kpIdx);
 
@@ -665,16 +253,15 @@ void ConfigPage::onLoadConfig()
     m_autoLaunchBrowser->setChecked(autoLaunch);
 
     QString hash = m_db->loadConfig("deepseek_key_hash");
-    m_apiKeyStatus->setText(hash.isEmpty() ? "未配置" : "已配置 ✓");
-    m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(hash.isEmpty() ? Theme::TextMuted : Theme::Success));
-
-    QString claudeHash = m_db->loadConfig("claude_key_hash");
-    m_claudeKeyStatus->setText(claudeHash.isEmpty() ? "未配置" : "已配置 ✓");
-    m_claudeKeyStatus->setStyleSheet(QString("color:%1;").arg(claudeHash.isEmpty() ? Theme::TextMuted : Theme::Success));
-
-    QString codexHash = m_db->loadConfig("codex_key_hash");
-    m_codexKeyStatus->setText(codexHash.isEmpty() ? "未配置" : "已配置 ✓");
-    m_codexKeyStatus->setStyleSheet(QString("color:%1;").arg(codexHash.isEmpty() ? Theme::TextMuted : Theme::Success));
+    if (hash.isEmpty()) {
+        m_apiKeyStatus->setText("未配置");
+        m_apiKeyStatus->setStyleSheet(QString("color:%1;").arg(Theme::TextMuted));
+        m_apiKey->setPlaceholderText("请输入 DeepSeek API Key");
+    } else {
+        m_apiKeyStatus->setText(QString("已配置 (Hash: %1) ✓").arg(hash));
+        m_apiKeyStatus->setStyleSheet(QString("color:%1; font-weight:bold;").arg(Theme::Success));
+        m_apiKey->setPlaceholderText(QString("已加密存储 — 输入新 Key 可替换 (Hash: %1)").arg(hash));
+    }
 }
 
 // ============================================================
@@ -685,11 +272,9 @@ void ConfigPage::onDetectEnvironment()
 {
     if (!m_db) return;
 
-    // 更新状态标签
     m_envStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Info));
     m_envStatus->setText("● 检测中...");
 
-    // 强制刷新 UI
     QCoreApplication::processEvents();
 
     QStringList okLines;
@@ -733,8 +318,7 @@ void ConfigPage::onDetectEnvironment()
     if (browserPath.isEmpty())
         browserPath = BrowserManager::findBrowserPath(BrowserManager::Chrome);
     if (!browserPath.isEmpty())
-        okLines.append(QString("✓ 浏览器: %1").arg(
-            QFileInfo(browserPath).baseName()));
+        okLines.append(QString("✓ 浏览器: %1").arg(QFileInfo(browserPath).baseName()));
     else
         warnLines.append("△ 浏览器: 未找到 Edge/Chrome");
 
@@ -768,21 +352,6 @@ void ConfigPage::onDetectEnvironment()
     else
         okLines.append(QString("✓ 平台 URL: 已注册 %1 个平台").arg(urls.size()));
 
-    // 7. 会话链接
-    QString currentProject = m_db->loadConfig("current_project", "");
-    if (currentProject.isEmpty()) {
-        warnLines.append("△ 当前项目: 未设置");
-    } else {
-        QString sessionsJson = m_db->loadConfig("sessions", "{}");
-        QJsonObject sessions = QJsonDocument::fromJson(sessionsJson.toUtf8()).object();
-        QJsonObject projSessions = sessions[currentProject].toObject();
-        if (projSessions.isEmpty())
-            warnLines.append(QString("△ 项目「%1」无会话链接").arg(currentProject));
-        else
-            okLines.append(QString("✓ 项目「%1」: %2 个会话链接").arg(
-                currentProject).arg(projSessions.size()));
-    }
-
     // 汇总显示
     QStringList allLines;
     allLines << okLines << warnLines << errLines;
@@ -791,7 +360,6 @@ void ConfigPage::onDetectEnvironment()
     html.replace("✗", QString("<span style='color:%1;'>✗</span>").arg(Theme::Error));
     html.replace("△", QString("<span style='color:%1;'>△</span>").arg(Theme::Warning));
 
-    // 整体状态
     bool allOk = errLines.isEmpty() && warnLines.isEmpty();
     QString overall = allOk
         ? QString("<span style='color:%1;'>● 环境就绪</span>").arg(Theme::Green)
@@ -800,145 +368,13 @@ void ConfigPage::onDetectEnvironment()
            : QString("<span style='color:%1;'>● 环境不可用 (需修复错误)</span>").arg(Theme::Error));
     m_envStatus->setText(overall + "<br>" + html);
 
-    // Toast 通知检测结果
     Toast::show(allOk ? "环境检测通过" : "环境检测完成 (有问题)",
                 allOk ? Toast::Success : Toast::Warning, this);
 }
 
 // ============================================================
-// 平台定型
+// 日志级别 + 平台下拉框
 // ============================================================
-
-void ConfigPage::onStartTyping()
-{
-    QString plat = m_typingPlatform->currentText();
-    QStringList targets;
-    if (m_typingText->isChecked()) targets.append("文字收发");
-    if (m_typingFile->isChecked()) targets.append("文件上传");
-    if (targets.isEmpty()) {
-        Toast::show("请至少选择一个定型目标", Toast::Warning, this);
-        return;
-    }
-
-    // 获取平台 URL
-    QString platUrl;
-    QJsonObject urls = m_configJson["platform_urls"].toObject();
-    if (urls.contains(plat)) {
-        platUrl = urls[plat].toString();
-    } else {
-        platUrl = QString("https://%1.com/").arg(plat);
-    }
-
-    // 获取 CDP 端口
-    int cdpPort = m_cdpPort->text().toInt();
-    if (cdpPort < 1) cdpPort = 9223;
-
-    // 检查浏览器是否在运行
-    if (!m_browser || !m_browser->isCdpAvailable(cdpPort)) {
-        Toast::show(QString("浏览器未就绪 (端口 %1)，请先启动").arg(cdpPort), Toast::Warning, this);
-        return;
-    }
-
-    // 确认对话框
-    auto answer = QMessageBox::question(this, "定型",
-        QString("将对「%1」平台进行定型\nURL: %2\nCDP: %3\n定型目标: %4\n\n"
-                "定型过程约需 60 秒，请保持浏览器窗口打开。\n继续？")
-            .arg(plat, platUrl).arg(cdpPort).arg(targets.join(" + ")));
-    if (answer != QMessageBox::Yes) return;
-
-    // 启动 typing_agent.py
-    QProcess *proc = new QProcess(this);
-    QString agentDir = QDir::currentPath() + "/agent";
-    QString typingPy = agentDir + "/typing_agent.py";
-
-    QStringList args;
-    args << typingPy << plat << platUrl
-         << "--cdp-port" << QString::number(cdpPort);
-
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert("PYTHONUTF8", "1");
-    proc->setProcessEnvironment(env);
-    proc->setWorkingDirectory(agentDir);
-
-    // UI 状态更新：定型中
-    m_typingBtn->setEnabled(false);
-    m_typingBtn->setText("定型中...");
-    m_typingStatus->setText(QString("● 正在定型 %1 ...").arg(plat));
-    m_typingStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Info));
-
-    // 完成处理
-    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, plat, proc](int exitCode, QProcess::ExitStatus) {
-        proc->deleteLater();
-        m_typingBtn->setEnabled(true);
-        m_typingBtn->setText("开始定型");
-
-        if (exitCode == 0) {
-            m_typingStatus->setText(QString("✓ %1 定型成功").arg(plat));
-            m_typingStatus->setStyleSheet(
-                QString("color:%1; font-size:11px; font-weight:bold; padding:4px 0;").arg(Theme::Green));
-            // 刷新定型下拉框
-            refreshTypingDropdown();
-        } else {
-            QString errOutput = QString::fromUtf8(proc->readAllStandardError());
-            QString detail = errOutput.isEmpty()
-                ? QString("退出码 %1").arg(exitCode)
-                : errOutput.left(120);
-            m_typingStatus->setText(QString("✗ %1 定型失败: %2").arg(plat, detail));
-            m_typingStatus->setStyleSheet(
-                QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Error));
-        }
-    });
-
-    connect(proc, &QProcess::readyReadStandardOutput, this, [proc]() {
-        qInfo().noquote() << "[Typing]" << proc->readAllStandardOutput().trimmed();
-    });
-    connect(proc, &QProcess::readyReadStandardError, this, [proc]() {
-        qWarning().noquote() << "[Typing]" << proc->readAllStandardError().trimmed();
-    });
-
-    proc->start("python", args);
-}
-
-// ============================================================
-// 平台健康刷新 + 日志级别
-// ============================================================
-
-void ConfigPage::refreshPlatformHealth()
-{
-    if (!m_browser) return;
-
-    int cdpPort = m_cdpPort->text().toInt();
-    bool cdpOk = m_browser->isCdpAvailable(cdpPort);
-
-    static const QStringList platforms = {"deepseek", "kimi", "chatgpt", "gemini"};
-    QLabel *labels[] = {m_healthDp, m_healthKi, m_healthCg, m_healthGm};
-
-    for (int i = 0; i < platforms.size(); i++) {
-        if (!labels[i]) continue;
-
-        // 查询该平台最近性能
-        double avgElapsed = 0;
-        if (m_db) {
-            auto perfs = m_db->platformPerformanceByPlatform(platforms[i]);
-            if (!perfs.isEmpty()) {
-                avgElapsed = perfs.first().avgElapsed;
-            }
-        }
-
-        QString status;
-        if (cdpOk) {
-            status = QString("● 可达 | 平均 %1s")
-                         .arg(avgElapsed > 0 ? QString::number(avgElapsed, 'f', 1)
-                                            : QString("--"));
-            labels[i]->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::Green));
-        } else {
-            status = "○ CDP 未连接";
-            labels[i]->setStyleSheet(QString("color: %1; font-size: 12px;").arg(Theme::TextMuted));
-        }
-        labels[i]->setText(QString("%1: %2").arg(platforms[i], status));
-    }
-}
 
 void ConfigPage::onLogLevelChanged(int index)
 {
@@ -954,37 +390,25 @@ void ConfigPage::onLogLevelChanged(int index)
     }
 }
 
-void ConfigPage::refreshTypingDropdown()
+void ConfigPage::refreshSearchPlatformDropdowns()
 {
-    if (!m_typingPlatform) return;
+    if (!m_defaultSearchPlatform) return;
 
-    // 收集当前所有已知平台（去重）
-    QSet<QString> known;
-
-    // 1. 从表格读取
-    for (int i = 0; i < m_platformTable->rowCount(); i++) {
-        auto *item = m_platformTable->item(i, 0);
-        if (item && !item->text().trimmed().isEmpty())
-            known.insert(item->text().trimmed());
-    }
-
-    // 2. 从 config.json 读取
     QJsonObject urls = m_configJson["platform_urls"].toObject();
-    for (const auto &key : urls.keys())
-        known.insert(key);
+    QStringList platforms = urls.keys();
+    if (platforms.isEmpty())
+        platforms = {"deepseek"};
 
-    // 3. 追加内置平台
-    static const QStringList builtin = {"deepseek", "kimi", "chatgpt", "gemini"};
-    for (const auto &p : builtin)
-        known.insert(p);
+    QString curSearch = m_defaultSearchPlatform->currentText();
+    QString curSynth = m_defaultSynthesisPlatform->currentText();
 
-    // 刷新下拉框
-    QString current = m_typingPlatform->currentText();
-    m_typingPlatform->clear();
-    for (const auto &p : known)
-        m_typingPlatform->addItem(p);
+    m_defaultSearchPlatform->clear();
+    m_defaultSynthesisPlatform->clear();
+    m_defaultSearchPlatform->addItems(platforms);
+    m_defaultSynthesisPlatform->addItems(platforms);
 
-    // 恢复选中
-    int idx = m_typingPlatform->findText(current);
-    if (idx >= 0) m_typingPlatform->setCurrentIndex(idx);
+    int si = m_defaultSearchPlatform->findText(curSearch);
+    if (si >= 0) m_defaultSearchPlatform->setCurrentIndex(si);
+    int ki = m_defaultSynthesisPlatform->findText(curSynth);
+    if (ki >= 0) m_defaultSynthesisPlatform->setCurrentIndex(ki);
 }

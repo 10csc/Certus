@@ -107,7 +107,7 @@ class TestProtocolIntegration:
             "query": query,
             "depth": "L2",
             "search_platform": "deepseek",
-            "synthesis_platform": "kimi",
+            "synthesis_platform": "deepseek",
             "data_dir": os.path.join(PROJECT_ROOT, "data"),
             "cdp_port": 9222,
         }
@@ -281,15 +281,15 @@ class TestCommonIntegration:
 
         test_config = {
             "cdp_port": 9224,
-            "search_platform": "chatgpt",
-            "synthesis_platform": "gemini",
+            "search_platform": "deepseek",
+            "synthesis_platform": "deepseek",
             "custom_field": "test_value",
         }
         set_runtime_config(test_config)
 
         loaded = load_config()
         assert loaded["cdp_port"] == 9224
-        assert loaded["search_platform"] == "chatgpt"
+        assert loaded["search_platform"] == "deepseek"
         assert loaded["custom_field"] == "test_value"
 
         # 重置

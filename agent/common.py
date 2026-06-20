@@ -61,23 +61,17 @@ def _read_config_file():
         config = json.load(f)
     config.setdefault("version", 0)
     config.setdefault("cdp_port", DEFAULT_CDP_PORT)
-    config.setdefault("project_name", "web_ai_search")
     config.setdefault("deepseek_api", "https://api.deepseek.com/v1")
     if "local_env" not in config:
         config["local_env"] = {"initialized": False}
-    config.setdefault("session_mode", "fixed")
-    config.setdefault("sessions", {})
-    config.setdefault("current_project", "")
     return config
 
 
 def _default_config():
     return {
         "version": CURRENT_VERSION, "cdp_port": DEFAULT_CDP_PORT,
-        "project_name": "web_ai_search",
         "deepseek_api": "https://api.deepseek.com/v1",
         "local_env": {"initialized": False},
-        "session_mode": "fixed", "sessions": {}, "current_project": "",
     }
 
 
@@ -86,8 +80,11 @@ def save_config(config):
 
     过滤掉运行时临时字段（query/depth/mock_cdp 等由 C++ hello 传入的字段），
     只保存持久化配置项，避免破坏 config.json 中的平台/会话信息。
+
+    Protocol 模式下禁止写文件——SQLite 为唯一权威源。
     """
-    # 运行时字段（不持久化）
+    if _runtime_config is not None:
+        return
     runtime_keys = {
         "query", "depth", "mock_cdp", "data_dir", "mock_file",
     }
@@ -121,28 +118,8 @@ def needs_version_upgrade():
     return config.get("version", 0) < CURRENT_VERSION
 
 
-def get_project_name():
-    return load_config().get("project_name", "web_ai_search")
-
-
-def _auto_project():
-    """从工作目录自动推断项目名"""
-    cwd = os.getcwd()
-    return os.path.basename(cwd.rstrip(os.sep)) or "default"
-
-
 def get_or_create_project():
-    """获取当前项目名。若 config.json 中 current_project 为空，自动从工作目录推断并持久化。"""
-    config = load_config()
-    project = config.get("current_project", "")
-    if project:
-        return project
-    # 首次使用：自动推断并保存
-    project = _auto_project()
-    cfg = load_config()
-    cfg["current_project"] = project
-    save_config(cfg)
-    return project
+    return "certus"
 
 
 # ====== CDP 端口管理 ======
@@ -410,56 +387,32 @@ def is_valid_session_url(url, platform=None):
     return len(path) > 0
 
 
-def get_session_url(project=None, platform=None):
-    """fixed 模式按 project+platform 两级查找会话链接。
+def get_session_url(platform=None):
+    """获取平台会话链接。
 
-    优先级：sessions.{project}.{platform} > platform_urls.{platform} > 拼凑
+    platform_urls 直接存储会话链接（用户注册时粘贴聊天页 URL），无需额外 sessions 层。
     """
     config = load_config()
-    platform_urls = config.get("platform_urls", {})
-    fallback = platform_urls.get(platform, f"https://chat.{platform}.com/") if platform else DEFAULT_URL
-    mode = config.get("session_mode", "fixed")
-    if mode != "fixed":
-        return fallback
-
-    project = project or config.get("current_project", "") or _auto_project()
-    sessions = config.get("sessions", {})
-
-    proj_sessions = sessions.get(project, {})
-    if isinstance(proj_sessions, dict) and platform and platform in proj_sessions:
-        return proj_sessions[platform]
-
-    # 兼容旧格式
-    if isinstance(proj_sessions, str) and proj_sessions:
-        return proj_sessions
-
-    return fallback
+    urls = config.get("platform_urls", {})
+    if platform and platform in urls:
+        return urls[platform]
+    return f"https://chat.{platform}.com/" if platform else DEFAULT_URL
 
 
-def _save_session(project, url):
-    """保存平台链接。
+def _save_session(platform, url):
+    """保存平台会话链接。
 
-    Protocol 模式（C++ 管理）：跳过——SQLite 为唯一权威源，且写回会泄漏明文 API key。
-    CLI 模式：写入 config.json。
+    Protocol 模式：更新内存中的 _runtime_config（C++ 下次 hello 时从 SQLite 重新读取）。
+    CLI 模式：写入 config.json 的 platform_urls。
     """
     if _runtime_config is not None:
-        # Protocol 模式：会话链接由 C++ 端 ConfigPage 写入 SQLite，Python 不写文件
+        urls = _runtime_config.setdefault("platform_urls", {})
+        urls[platform] = url
         return
     try:
         config = load_config()
-    except Exception as e:
-        print(f"[警告] 读取 config.json 失败: {e}")
-        return
-    platform = detect_platform(url)
-    sessions = config.setdefault("sessions", {})
-    proj_sessions = sessions.setdefault(project, {})
-    if isinstance(proj_sessions, str):
-        old_url = proj_sessions
-        old_platform = detect_platform(old_url)
-        proj_sessions = {old_platform: old_url}
-        sessions[project] = proj_sessions
-    proj_sessions[platform] = url
-    try:
+        urls = config.setdefault("platform_urls", {})
+        urls[platform] = url
         save_config(config)
     except Exception as e:
         print(f"[警告] 保存会话链接失败: {e}")
@@ -510,7 +463,7 @@ def get_search_platform():
 
 def get_synthesis_platform():
     """读取默认整合平台。"""
-    return load_config().get("synthesis_platform", "kimi")
+    return load_config().get("synthesis_platform", "deepseek")
 
 
 def call_deepseek_api(system_prompt, user_prompt, model="deepseek-v4-pro",

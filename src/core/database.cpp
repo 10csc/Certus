@@ -62,9 +62,6 @@ void Database::seedDefaultConfig()
     if (loadConfig("platform_urls", "").isEmpty()) {
         QJsonObject urls;
         urls["deepseek"] = "https://chat.deepseek.com/";
-        urls["kimi"] = "https://www.kimi.com/";
-        urls["chatgpt"] = "https://chatgpt.com/";
-        urls["gemini"] = "https://gemini.google.com/";
         QJsonDocument doc(urls);
         saveConfig("platform_urls", QString::fromUtf8(doc.toJson()));
     }
@@ -74,20 +71,23 @@ void Database::seedDefaultConfig()
             QJsonArray arr; arr.append(QString("/a/chat/s/"));
             patterns["deepseek"] = arr;
         }
-        {
-            QJsonArray arr; arr.append(QString("/chat/"));
-            patterns["kimi"] = arr;
-        }
-        {
-            QJsonArray arr; arr.append(QString("/c/"));
-            patterns["chatgpt"] = arr;
-        }
-        {
-            QJsonArray arr; arr.append(QString("/app/"));
-            patterns["gemini"] = arr;
-        }
         QJsonDocument doc(patterns);
         saveConfig("chat_path_patterns", QString::fromUtf8(doc.toJson()));
+    }
+    if (loadConfig("cdp_port", "").isEmpty()) {
+        saveConfig("cdp_port", "9223");
+    }
+    if (loadConfig("search_platform", "").isEmpty()) {
+        saveConfig("search_platform", "deepseek");
+    }
+    if (loadConfig("synthesis_platform", "").isEmpty()) {
+        saveConfig("synthesis_platform", "deepseek");
+    }
+    if (loadConfig("auto_depth", "").isEmpty()) {
+        saveConfig("auto_depth", "1");
+    }
+    if (loadConfig("auto_launch_browser", "").isEmpty()) {
+        saveConfig("auto_launch_browser", "0");
     }
 }
 
@@ -232,6 +232,12 @@ void Database::migrateSchema()
         version = 1;
     }
 
+    // version 1 → 2: knowledge 表添加 deleted 软删除标记
+    if (version < 2) {
+        q.exec("ALTER TABLE knowledge ADD COLUMN deleted INTEGER DEFAULT 0");
+        version = 2;
+    }
+
     // 更新 schema 版本
     q.exec(QString("PRAGMA user_version = %1").arg(version));
 }
@@ -370,6 +376,25 @@ QList<Database::SearchRecord> Database::recentSearches(int limit,
         results.append(r);
     }
     return results;
+}
+
+bool Database::deleteSearchRecord(qint64 id)
+{
+    if (!m_db.isOpen()) return false;
+
+    // 级联删除关联的可靠性快照和来源评分
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM reliability_snapshot WHERE search_id = ?");
+    q.addBindValue(id);
+    q.exec();
+
+    q.prepare("DELETE FROM source_score WHERE search_id = ?");
+    q.addBindValue(id);
+    q.exec();
+
+    q.prepare("DELETE FROM search_history WHERE id = ?");
+    q.addBindValue(id);
+    return q.exec() && q.numRowsAffected() > 0;
 }
 
 // ============================================================
@@ -551,7 +576,8 @@ QList<Database::KnowledgeEntry> Database::searchKnowledge(const QString &keyword
     QList<KnowledgeEntry> results;
     QSqlQuery q(m_db);
     q.prepare("SELECT id, topic, conclusion, sources, created_at"
-              "  FROM knowledge WHERE topic LIKE ? OR conclusion LIKE ?"
+              "  FROM knowledge WHERE COALESCE(deleted,0)=0"
+              "  AND (topic LIKE ? OR conclusion LIKE ?)"
               "  ORDER BY id DESC LIMIT 50");
     q.addBindValue("%" + keyword + "%");
     q.addBindValue("%" + keyword + "%");
@@ -601,7 +627,7 @@ bool Database::updateKnowledge(qint64 id, const KnowledgeEntry &entry)
 bool Database::deleteKnowledge(qint64 id)
 {
     QSqlQuery q(m_db);
-    q.prepare("DELETE FROM knowledge WHERE id = ?");
+    q.prepare("UPDATE knowledge SET deleted = 1 WHERE id = ?");
     q.addBindValue(id);
     return q.exec() && q.numRowsAffected() > 0;
 }
@@ -611,7 +637,8 @@ QList<Database::KnowledgeEntry> Database::listKnowledge(int limit, int offset)
     QList<KnowledgeEntry> results;
     QSqlQuery q(m_db);
     q.prepare("SELECT id, topic, conclusion, sources, created_at"
-              "  FROM knowledge ORDER BY id DESC LIMIT ? OFFSET ?");
+              "  FROM knowledge WHERE COALESCE(deleted,0)=0"
+              "  ORDER BY id DESC LIMIT ? OFFSET ?");
     q.addBindValue(limit);
     q.addBindValue(offset);
     q.exec();
@@ -770,7 +797,8 @@ int Database::backfillKnowledgeFromHistory()
         "SELECT h.id, h.query, h.platform, h.report_path "
         "FROM search_history h "
         "WHERE h.status = 'done' "
-        "AND NOT EXISTS (SELECT 1 FROM knowledge k WHERE k.topic = h.query) "
+        "AND NOT EXISTS (SELECT 1 FROM knowledge k WHERE k.topic = h.query AND COALESCE(k.deleted,0)=0) "
+        "AND NOT EXISTS (SELECT 1 FROM knowledge k WHERE k.topic = h.query AND COALESCE(k.deleted,0)=1) "
         "ORDER BY h.id");
     int count = 0;
     while (q.next()) {

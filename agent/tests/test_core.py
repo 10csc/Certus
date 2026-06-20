@@ -36,17 +36,8 @@ def temp_skill_dir():
     # 写默认 config
     cfg = {
         "version": 6,
-        "session_mode": "fixed",
-        "sessions": {
-            "myproject": {
-                "deepseek": "https://chat.deepseek.com/a/chat/s/abc123",
-                "kimi": "https://www.kimi.com/chat/xyz789",
-            }
-        },
-        "current_project": "myproject",
         "platform_urls": {
-            "deepseek": "https://chat.deepseek.com/",
-            "kimi": "https://www.kimi.com/",
+            "deepseek": "https://chat.deepseek.com/a/chat/s/abc123",
         },
         "cdp_port": 9223,
         "project_name": "test_project",
@@ -87,25 +78,12 @@ def workspace_dir(temp_skill_dir):
 # ============================================================
 
 class TestDetectPlatform:
-    def test_deepseek(self):
+    def test_deepseek(self, temp_skill_dir):
         import common
         assert common.detect_platform("https://chat.deepseek.com/") == "deepseek"
         assert common.detect_platform("https://chat.deepseek.com/a/chat/s/xxx") == "deepseek"
 
-    def test_kimi(self):
-        import common
-        assert common.detect_platform("https://www.kimi.com/") == "kimi"
-        assert common.detect_platform("https://www.kimi.com/chat/xxx") == "kimi"
-
-    def test_chatgpt(self):
-        import common
-        assert common.detect_platform("https://chatgpt.com/c/abc") == "chatgpt"
-
-    def test_gemini(self):
-        import common
-        assert common.detect_platform("https://gemini.google.com/app/xxx") == "gemini"
-
-    def test_unknown(self):
+    def test_unknown(self, temp_skill_dir):
         import common
         assert common.detect_platform("https://www.baidu.com/") == "unknown"
         assert common.detect_platform("") == "unknown"
@@ -117,17 +95,10 @@ class TestIsValidSessionUrl:
         assert common.is_valid_session_url(
             "https://chat.deepseek.com/a/chat/s/abc123", "deepseek")
 
-    def test_valid_kimi(self):
-        import common
-        assert common.is_valid_session_url(
-            "https://www.kimi.com/chat/xyz789", "kimi")
-
     def test_invalid_homepage(self):
         import common
         assert not common.is_valid_session_url(
             "https://chat.deepseek.com/", "deepseek")
-        assert not common.is_valid_session_url(
-            "https://www.kimi.com/", "kimi")
 
     def test_empty_url(self):
         import common
@@ -144,38 +115,23 @@ class TestIsValidSessionUrl:
 class TestGetSessionUrl:
     def test_fixed_mode_session_found(self, temp_skill_dir):
         import common
-        url = common.get_session_url(project="myproject", platform="deepseek")
+        url = common.get_session_url(platform="deepseek")
         assert "/a/chat/s/abc123" in url
 
-    def test_fixed_mode_fallback(self, temp_skill_dir):
+    def test_fixed_mode_returns_registered_url(self, temp_skill_dir):
         import common
-        url = common.get_session_url(project="myproject", platform="gemini")
-        # fallback: f"https://chat.{platform}.com/"
-        assert "chat.gemini.com" in url
+        url = common.get_session_url(platform="deepseek")
+        assert "chat.deepseek.com" in url
 
     def test_fixed_mode_no_project(self, temp_skill_dir):
         import common
-        # 未指定 project → 从 config 取 current_project
         url = common.get_session_url(platform="deepseek")
         assert "/a/chat/s/abc123" in url
 
     def test_fallback_when_platform_none(self, temp_skill_dir):
         import common
-        url = common.get_session_url(project="myproject", platform=None)
+        url = common.get_session_url(platform=None)
         assert url == common.DEFAULT_URL
-
-    def test_old_format_sessions(self, temp_skill_dir):
-        """兼容旧格式：sessions.{project} 是字符串而非 dict"""
-        import common
-        cfg_path = common.CONFIG_PATH
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        cfg["sessions"]["legacy_project"] = "https://chat.deepseek.com/a/chat/s/old_link"
-        cfg["current_project"] = "legacy_project"
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        url = common.get_session_url(project="legacy_project", platform="deepseek")
-        assert url == "https://chat.deepseek.com/a/chat/s/old_link"
 
 
 class TestLoadConfig:
@@ -188,8 +144,6 @@ class TestLoadConfig:
     def test_defaults_applied(self, temp_skill_dir):
         import common
         cfg = common.load_config()
-        assert "session_mode" in cfg
-        assert "sessions" in cfg
         assert "cdp_port" in cfg
         assert "deepseek_api" in cfg
 
@@ -198,7 +152,7 @@ class TestGetOrCreateProject:
     def test_existing_project(self, temp_skill_dir):
         import common
         proj = common.get_or_create_project()
-        assert proj == "myproject"
+        assert proj == "certus"
 
 
 # ============================================================
@@ -409,7 +363,7 @@ class TestWorkspaceState:
         ws = WorkspaceState()
         ws.set_query("测试查询")
         ws.add_result("deepseek", "问题A", 1000, 0, 3)
-        ws.add_result("kimi", "问题B", 2000, 1, 5)
+        ws.add_result("deepseek", "问题B", 2000, 1, 5)
         s = ws.get_summary()
         assert s["results"] == 2
         assert s["status"] == "executing"
@@ -447,12 +401,12 @@ class TestPlatformStats:
         from workspace import record_episode, get_platform_stats
         record_episode("statsproj", "deepseek", "A", "L2", 50, 8, 4000, 0)
         record_episode("statsproj", "deepseek", "B", "L2", 30, 6, 3000, 2)
-        record_episode("statsproj", "kimi", "C", "L2", 40, 9, 5000, 0)
+        record_episode("statsproj", "deepseek", "C", "L2", 40, 9, 5000, 0)
 
         stats = get_platform_stats("statsproj")
         assert "deepseek" in stats
-        assert stats["deepseek"]["count"] == 2
-        assert stats["deepseek"]["avg_credibility"] == 7.0
+        assert stats["deepseek"]["count"] == 3
+        assert stats["deepseek"]["avg_credibility"] == pytest.approx(23.0/3.0, abs=0.1)
         assert stats["deepseek"]["avg_duration"] == 40.0
 
 

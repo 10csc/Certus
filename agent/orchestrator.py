@@ -25,8 +25,8 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from common import (
-    load_config, ensure_browser, ensure_page, safe_page_text,
-    get_or_create_project, get_session_url, is_valid_session_url, DEFAULT_CDP_PORT,
+    ensure_browser, ensure_page, safe_page_text,
+    get_session_url, is_valid_session_url, DEFAULT_CDP_PORT,
     submit_and_verify, save_result,
     get_search_platform, get_synthesis_platform,
 )
@@ -117,7 +117,7 @@ def _is_valid_synthesis(content, max_chars=2000):
     answer = call_deepseek_api(
         system_prompt="你是一个内容质量检测器。只回复 YES 或 NO。",
         user_prompt=f"以下文本是否是一份有效的研究整合报告（包含分析、结论、验证标注）？如果文本主要是道歉、拒绝、高峰期提示、或只有搜索URL列表没有分析，回复 NO。\n\n{sample}",
-        model="deepseek-chat",
+        model="deepseek-v4-pro",
         max_tokens=2,
         temperature=0.0,
         timeout=30,
@@ -167,14 +167,14 @@ def _evolve_upload(platform, page):
         print(f"  [进化] 上传诊断失败: {e}")
 
 
-def check_platform_config(project=None):
+def check_platform_config():
     """首次使用检查：打印各平台配置状态。"""
     from common import get_session_url, is_valid_session_url
     lines = []
     sp = get_search_platform()
     kp = get_synthesis_platform()
     for plat in list(dict.fromkeys([sp, kp])):  # 去重
-        url = get_session_url(project=project, platform=plat)
+        url = get_session_url(platform=plat)
         ok = is_valid_session_url(url, plat)
         status = "✓ 已配置" if ok else "✗ 未配置（首页）"
         lines.append(f"  {plat}: {status}  {url[:80]}")
@@ -199,29 +199,32 @@ def _submit_to_platform(platform, page, prompt, topic):
         return False, str(e)
 
 
-def _send_one(browser, platform, question, config, project, depth, decomposed, stage="search"):
+def _send_one(browser, platform, question, config, depth, decomposed, stage="search"):
     """发送一个问题，返回 (page, prompt, topic) 或 (None,None,None)。
 
     stage="search" 用 build_search_prompt（开放性探索+可靠性自标注）
     stage="synthesis" 用 build_synthesis_prompt（被动验证+可信度报告）
     """
+    print(f"  [_send_one] 开始 | stage={stage} | q_len={len(question)}",
+          file=sys.stderr, flush=True)
     if stage == "synthesis":
         topic, prompt = build_synthesis_prompt(question, depth)
     else:
         topic, prompt = build_search_prompt(question, depth)
+    print(f"  [_send_one] prompt 构建完成 | topic={topic[:40]} | prompt_len={len(prompt)}",
+          file=sys.stderr, flush=True)
     ok, errors = validate_prompt(prompt, topic)
     if not ok:
         print(f"  [{platform}] prompt 验证失败")
         return None, None, None
 
-    session_url = get_session_url(project=project, platform=platform)
+    session_url = get_session_url(platform=platform)
 
     if not is_valid_session_url(session_url, platform):
         print(f"  [{platform}] ⚠ 未配置聊天链接（当前是首页，无法使用）")
         print(f"  [{platform}] → 请先在浏览器中打开 {platform} 创建一个新聊天")
-        print(f"  [{platform}] → 然后把聊天 URL 贴到 ConfigPage「项目管理」→「{project}」的 {platform} 链接")
-        # 返回特殊错误标记——这是配置问题，重试无意义
-        raise ConfigError(f"项目「{project}」未配置 {platform} 会话链接")
+        print(f"  [{platform}] → 然后把聊天 URL 贴到 ConfigPage「会话链接」→ {platform}")
+        raise ConfigError(f"平台 {platform} 未配置有效会话链接")
 
     try:
         page = ensure_page(browser, session_url, new_tab=False)
@@ -229,6 +232,8 @@ def _send_one(browser, platform, question, config, project, depth, decomposed, s
     except Exception as e:
         print(f"  [{platform}] 打开页面失败: {e}")
         return None, None, None
+    print(f"  [_send_one] 页面就绪 | url={page.url[:60]}",
+          file=sys.stderr, flush=True)
 
     ok_send, err = _submit_to_platform(platform, page, prompt, topic)
     if not ok_send:
@@ -245,7 +250,7 @@ def _send_one(browser, platform, question, config, project, depth, decomposed, s
     time.sleep(0.5)
     if page.url != session_url:
         from common import _save_session
-        _save_session(project, page.url)
+        _save_session(platform, page.url)
         print(f"  [{platform}] ✓ 已发送 (新会话)")
     else:
         print(f"  [{platform}] ✓ 已发送")
@@ -409,13 +414,17 @@ def _diagnose_and_adapt(error_type, platform=None):
     return result
 
 
-def execute(plan_dict, progress_callback=None, on_event=None):
+def execute(plan_dict, progress_callback=None, on_event=None,
+            config=None):
     """执行搜索计划。
 
     L2: 单平台搜索 + 可靠性评估（无重搜）
     L3: 搜索（可靠性循环）+ 整合验证（被动验证模式）
 
     on_event: 可选回调 on_event(event_type, **payload)，用于推送 JSON 事件到 stdout。
+
+    config: Protocol 模式必须显式注入。
+        仅 CLI 和测试回退到内部 load_config()。
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -425,22 +434,27 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                      detail="未安装 playwright")
         return {"error": "未安装 playwright"}
 
-    config = load_config()
-    project = get_or_create_project()
+    if config is None:
+        from common import load_config as _lc
+        config = _lc()
+
     depth = plan_dict.get("depth", "L2")
     sqs = plan_dict["sub_questions"]
     results = []
     all_links = []
-    sp = get_search_platform()
-    kp = get_synthesis_platform()
+    sp = config.get("search_platform", "deepseek")
+    kp = config.get("synthesis_platform", "deepseek")
     send_failures = 0
     MAX_SEND_FAILURES = 3
     replan = plan_dict.get("replan_triggers", {})
     max_research_rounds = replan.get("max_research_rounds", 2)
 
     with sync_playwright() as p:
+        print(f"[Execute] sync_playwright 就绪 | depth={depth} | cdp={config.get('cdp_port', DEFAULT_CDP_PORT)}",
+              file=sys.stderr)
         browser, _ = ensure_browser(p, config.get("cdp_port", DEFAULT_CDP_PORT),
                                    launch_policy="external")
+        print(f"[Execute] 浏览器已连接", file=sys.stderr)
 
         if depth == "L2":
             # === L2: 单平台搜索 + 可靠性评估 ===
@@ -451,7 +465,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                 on_event("stage_start", stage="search_1", question=sq["question"], platform=sp)
             try:
                 page, prompt, topic = _send_one(browser, sp, sq["question"],
-                                                config, project, depth, True, stage)
+                                                config, depth, True, stage)
             except ConfigError as ce:
                 print(f"  ⛔ 配置错误: {ce}")
                 if on_event:
@@ -470,24 +484,34 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                                     on_event=on_event, stage_name="search_1")
                 elapsed = time.time() - t_start
                 if content:
-                    reliability = assess_reliability(content)
-                    gaps = detect_gaps(content)
-                    links = extract_links(content)
-                    all_links.extend(links)
-                    results.append({"question": sq["question"], "platform": sp,
-                        "content": content, "gaps": gaps, "links": links,
-                        "content_len": len(content), "reliability": reliability})
-                    log_entry(project, "output", f"[{sp}] {len(content)}字符 可靠={reliability.get('reliable')}")
-                    print(f"  [{sp}] ✓ {len(content)}字符 可靠={reliability.get('reliable')}")
-                    if on_event:
-                        source_analysis = analyze_sources(links)
-                        # 合并具名信源（无URL的信源标记）
-                        named = extract_named_sources(content)
-                        all_sources = source_analysis.get("sources", []) + named
-                        on_event("stage_done", stage="search_1", platform=sp,
-                                 content_len=len(content), reliability=reliability,
-                                 elapsed_sec=round(elapsed, 1),
-                                 sources=all_sources)
+                    # 内容质量验证（对齐 WebAISearch _validate_extraction）
+                    valid, vreason = validate_content(content, topic, sp)
+                    if not valid:
+                        print(f"  [{sp}] ⚠ 内容质量不合格: {vreason}")
+                        results.append({"question": sq["question"], "platform": sp,
+                                        "content": None, "error": f"内容质量不合格: {vreason}",
+                                        "gaps": [], "links": []})
+                        if on_event:
+                            on_event("stage_done", stage="search_1", platform=sp,
+                                     content_len=0, status="invalid_content", error=vreason)
+                    else:
+                        reliability = assess_reliability(content)
+                        gaps = detect_gaps(content)
+                        links = extract_links(content)
+                        all_links.extend(links)
+                        results.append({"question": sq["question"], "platform": sp,
+                            "content": content, "gaps": gaps, "links": links,
+                            "content_len": len(content), "reliability": reliability})
+                        log_entry("certus", "output", f"[{sp}] {len(content)}字符 可靠={reliability.get('reliable')}")
+                        print(f"  [{sp}] ✓ {len(content)}字符 可靠={reliability.get('reliable')}")
+                        if on_event:
+                            source_analysis = analyze_sources(links)
+                            named = extract_named_sources(content)
+                            all_sources = source_analysis.get("sources", []) + named
+                            on_event("stage_done", stage="search_1", platform=sp,
+                                     content_len=len(content), reliability=reliability,
+                                     elapsed_sec=round(elapsed, 1),
+                                     sources=all_sources)
                 else:
                     results.append({"question": sq["question"], "platform": sp,
                                     "content": None, "error": "提取超时", "gaps": [], "links": []})
@@ -506,6 +530,8 @@ def execute(plan_dict, progress_callback=None, on_event=None):
             # === L3: 搜索（可靠性循环）+ 整合验证 ===
             search_sqs = [s for s in sqs if s.get("stage") != "synthesis"]
             synth_sqs = [s for s in sqs if s.get("stage") == "synthesis"]
+            print(f"[Execute] L3 分解: 搜索={len(search_sqs)}个 整合={len(synth_sqs)}个",
+                  file=sys.stderr, flush=True)
 
             # --- 阶段 1: 搜索 + 可靠性循环 ---
             for i, sq in enumerate(search_sqs):
@@ -514,7 +540,8 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                     break
 
                 stage_name = f"search_{i+1}"
-                print(f"\n[Search] L3 [{i+1}/{len(search_sqs)}] {sp}: {sq['question'][:60]}")
+                print(f"\n[Search] L3 [{i+1}/{len(search_sqs)}] {sp}: {sq['question'][:60]}",
+                      file=sys.stderr, flush=True)
                 if on_event:
                     on_event("stage_start", stage=stage_name, question=sq["question"], platform=sp)
                 content = None
@@ -527,9 +554,11 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                         break
                     if round_num > 0:
                         print(f"  [重搜] 第{round_num}轮 ({sq['question'][:40]}...)")
+                    print(f"  [Search] _send_one 开始 | round={round_num}",
+                          file=sys.stderr, flush=True)
                     try:
                         page, prompt, topic = _send_one(browser, sp, sq["question"],
-                                                        config, project, depth, True, "search")
+                                                        config, depth, True, "search")
                     except ConfigError as ce:
                         print(f"  ⛔ 配置错误: {ce}")
                         if on_event:
@@ -587,24 +616,36 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                     re_search_count += 1
 
                 if content:
-                    gaps = detect_gaps(content)
-                    links = extract_links(content)
-                    all_links.extend(links)
-                    results.append({"question": sq["question"], "platform": sp,
-                        "content": content, "gaps": gaps, "links": links,
-                        "content_len": len(content),
-                        "reliability": reliability or {},
-                        "re_search_count": re_search_count})
-                    log_entry(project, "output", f"[{sp}] {len(content)}字符 重搜={re_search_count}次")
-                    print(f"  [{sp}] ✓ {len(content)}字符 (重搜{re_search_count}次)")
-                    if on_event:
-                        source_analysis = analyze_sources(links)
-                        named = extract_named_sources(content)
-                        on_event("stage_done", stage=stage_name, platform=sp,
-                                 content_len=len(content), reliability=reliability or {},
-                                 elapsed_sec=round(elapsed, 1),
-                                 re_search_count=re_search_count,
-                                 sources=source_analysis.get("sources", []) + named)
+                    # 内容质量验证（对齐 WebAISearch _validate_extraction）
+                    # 注意：topic 来自 _send_one，包含 @hash（与 AI 回复中的标记一致）
+                    valid, vreason = validate_content(content, topic or "", sp)
+                    if not valid:
+                        print(f"  [{sp}] ⚠ 内容质量不合格: {vreason}")
+                        results.append({"question": sq["question"], "platform": sp,
+                                        "content": None, "error": f"内容质量不合格: {vreason}",
+                                        "gaps": [], "links": []})
+                        if on_event:
+                            on_event("stage_done", stage=stage_name, platform=sp,
+                                     content_len=0, status="invalid_content", error=vreason)
+                    else:
+                        gaps = detect_gaps(content)
+                        links = extract_links(content)
+                        all_links.extend(links)
+                        results.append({"question": sq["question"], "platform": sp,
+                            "content": content, "gaps": gaps, "links": links,
+                            "content_len": len(content),
+                            "reliability": reliability or {},
+                            "re_search_count": re_search_count})
+                        log_entry("certus", "output", f"[{sp}] {len(content)}字符 重搜={re_search_count}次")
+                        print(f"  [{sp}] ✓ {len(content)}字符 (重搜{re_search_count}次)")
+                        if on_event:
+                            source_analysis = analyze_sources(links)
+                            named = extract_named_sources(content)
+                            on_event("stage_done", stage=stage_name, platform=sp,
+                                     content_len=len(content), reliability=reliability or {},
+                                     elapsed_sec=round(elapsed, 1),
+                                     re_search_count=re_search_count,
+                                     sources=source_analysis.get("sources", []) + named)
                 else:
                     results.append({"question": sq["question"], "platform": sp,
                                     "content": None, "error": "提取超时", "gaps": [], "links": []})
@@ -623,7 +664,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                     f"## 采集方向 {i+1}\n{r['content']}"
                     for i, r in enumerate(results) if r.get("content")
                 ])
-                data_dir = os.path.join(os.path.dirname(SCRIPT_DIR), "data")
+                data_dir = (config or {}).get("data_dir") or os.path.join(os.path.dirname(SCRIPT_DIR), "data")
                 os.makedirs(data_dir, exist_ok=True)
                 mat_file = os.path.join(data_dir, "_materials.md")
                 try: os.remove(mat_file)
@@ -643,7 +684,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
 
                 # 2. 打开整合平台 + 上传素材 + 发送验证提示词
                 if synthesis_ok:
-                    session_url = get_session_url(project=project, platform=kp)
+                    session_url = get_session_url(platform=kp)
                     if not is_valid_session_url(session_url, kp):
                         print(f"  [{kp}] ⚠ 未配置聊天链接 → 降级本地 API 总结")
                         content = _synthesize_local(materials, plan_dict.get("original_query", ""))
@@ -651,7 +692,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                             results.append({"question": sq["question"], "platform": f"{kp}(本地)",
                                 "content": content, "gaps": [], "links": [],
                                 "content_len": len(content)})
-                            log_entry(project, "output", f"[{kp}/本地] {len(content)}字符")
+                            log_entry("certus", "output", f"[{kp}/本地] {len(content)}字符")
                             print(f"  [{kp}/本地] ✓ {len(content)}字符")
                         else:
                             results.append({"question": sq["question"], "platform": kp,
@@ -714,7 +755,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                     time.sleep(0.5)
                     if page.url != session_url:
                         from common import _save_session
-                        _save_session(project, page.url)
+                        _save_session(platform, page.url)
                         print(f"  [{kp}] ✓ 已发送 (新会话)")
                     else:
                         print(f"  [{kp}] ✓ 已发送")
@@ -733,7 +774,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                                 results.append({"question": sq["question"], "platform": f"{kp}(本地)",
                                     "content": local, "gaps": [], "links": [],
                                     "content_len": len(local)})
-                                log_entry(project, "output", f"[{kp}/本地] {len(local)}字符")
+                                log_entry("certus", "output", f"[{kp}/本地] {len(local)}字符")
                                 print(f"  [{kp}/本地] ✓ {len(local)}字符")
                             else:
                                 results.append({"question": sq["question"], "platform": kp,
@@ -746,7 +787,7 @@ def execute(plan_dict, progress_callback=None, on_event=None):
                             results.append({"question": sq["question"], "platform": kp,
                                 "content": content, "gaps": gaps, "links": links,
                                 "content_len": len(content)})
-                            log_entry(project, "output", f"[{kp}] {len(content)}字符")
+                            log_entry("certus", "output", f"[{kp}] {len(content)}字符")
                             print(f"  [{kp}] ✓ {len(content)}字符")
                     else:
                         results.append({"question": sq["question"], "platform": kp,
@@ -770,7 +811,8 @@ def execute(plan_dict, progress_callback=None, on_event=None):
 
     # 清理临时材料文件
     try:
-        mat_file = os.path.join(os.path.dirname(SCRIPT_DIR), "data", "_materials.md")
+        cleanup_dir = (config or {}).get("data_dir") or os.path.join(os.path.dirname(SCRIPT_DIR), "data")
+        mat_file = os.path.join(cleanup_dir, "_materials.md")
         if os.path.exists(mat_file):
             os.remove(mat_file)
     except Exception as e:
@@ -781,6 +823,34 @@ def execute(plan_dict, progress_callback=None, on_event=None):
         "gaps_total": sum(len(r.get("gaps", [])) for r in results),
         "all_links": list(set(all_links)),
     }
+
+
+def validate_content(content, topic="", platform=""):
+    """提取后内容质量验证（对齐 WebAISearch main.py:_validate_extraction）。
+
+    返回 (ok: bool, reason: str)。
+    """
+    if not content or len(content) < 150:
+        return False, f"内容过短 ({len(content) if content else 0} 字符)"
+    # 检查结尾标记至少出现 2 次（形成标记对）
+    marker = f"[搜索主题：{topic}]"
+    marker_count = content.count(marker) if topic else 2
+    if marker_count < 2:
+        print(f"  [validate] 标记匹配失败 | marker='{marker[:50]}' | "
+              f"count={marker_count} | content_tail={content[-100:]!r}",
+              file=sys.stderr, flush=True)
+        return False, f"标记不足 (仅 {marker_count} 个)"
+    # 排除明显错误：提取到了 prompt 而非 AI 回复
+    bad_starts = ["请联网搜索", "请搜索", "ERROR", "搜索主题"]
+    stripped = content.strip()
+    if any(stripped.startswith(s) for s in bad_starts):
+        return False, "内容以搜索指令开头（可能提取了 prompt 而非回复）"
+    # 排除明显的平台错误页面
+    bad_patterns = ["Something went wrong", "请登录", "Please log in", "Access denied"]
+    for bp in bad_patterns:
+        if bp.lower() in stripped[:500].lower():
+            return False, f"页面包含错误信息: {bp}"
+    return True, f"{len(content)} 字符, 标记×{marker_count}"
 
 
 def final_review(results, user_query):
@@ -845,13 +915,15 @@ def final_review(results, user_query):
     return reviewed, {"reviewed": True}
 
 
-def execute_simple(query, platform="deepseek", depth="L2"):
+def execute_simple(query, platform="deepseek", depth="L2", config=None):
+    from prompt_builder import refine_query
+    refined = refine_query(query)
     plan_dict = {
         "original_query": query, "depth": depth,
-        "sub_questions": [{"question": query, "platform": platform, "reason": "指定"}],
+        "sub_questions": [{"question": refined, "platform": platform, "reason": "指定"}],
         "decomposed": False, "replan_triggers": {},
     }
-    outcome = execute(plan_dict)
+    outcome = execute(plan_dict, config=config)
     if "error" in outcome: return f"ERROR: {outcome['error']}"
     r = outcome.get("results", [])
     return r[0].get("content") if r else None

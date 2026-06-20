@@ -40,9 +40,11 @@ set(GUI_SOURCES
     src/pages/monitorpage.cpp
     src/pages/memorypage.cpp
     src/pages/repairpage.cpp
+    src/pages/platformpage.cpp
     src/ui/minibarchart.cpp
     src/ui/theme.cpp
     src/ui/toast.cpp
+    src/ui/icons.cpp
     src/ui/stageprogress.cpp
 )
 
@@ -53,9 +55,11 @@ set(GUI_HEADERS
     src/pages/monitorpage.h
     src/pages/memorypage.h
     src/pages/repairpage.h
+    src/pages/platformpage.h
     src/ui/minibarchart.h
     src/ui/theme.h
     src/ui/toast.h
+    src/ui/icons.h
     src/ui/stageprogress.h
 )
 
@@ -77,6 +81,7 @@ target_link_libraries(certus_backend PRIVATE
 
 add_executable(certus_gui
     src/main_gui.cpp
+    resources/certus.rc
     ${CORE_SOURCES} ${CORE_HEADERS}
     ${GUI_SOURCES} ${GUI_HEADERS}
 )
@@ -98,6 +103,53 @@ if(WIN32)
     set_target_properties(certus_backend PROPERTIES WIN32_EXECUTABLE OFF)
     set_target_properties(certus_gui PROPERTIES WIN32_EXECUTABLE ON)
 endif()
+
+# ============================================================
+# 自动部署到项目根目录（每次构建后自动同步 exe + Qt 依赖）
+# ============================================================
+
+set(DEPLOY_DIR "${CMAKE_SOURCE_DIR}")
+set(BUILD_BIN_DIR "$<TARGET_FILE_DIR:certus_gui>")
+
+# certus_gui 部署（用脚本模式确保容错）
+add_custom_command(TARGET certus_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}/platforms"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}/sqldrivers"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/certus_gui.exe"
+        "${DEPLOY_DIR}/certus_gui.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/Qt6Core.dll"       "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/Qt6Gui.dll"        "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/Qt6Network.dll"    "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/Qt6Sql.dll"        "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/Qt6Widgets.dll"    "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/msvcp140.dll"       "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/vcruntime140.dll"   "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/vcruntime140_1.dll" "${DEPLOY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/platforms/qwindows.dll"
+        "${DEPLOY_DIR}/platforms/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/sqldrivers/qsqlite.dll"
+        "${DEPLOY_DIR}/sqldrivers/"
+    COMMENT "部署 certus_gui → ${DEPLOY_DIR}"
+)
+
+# certus_backend 部署
+add_custom_command(TARGET certus_backend POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILD_BIN_DIR}/certus_backend.exe"
+        "${DEPLOY_DIR}/certus_backend.exe"
+    COMMENT "部署 certus_backend → ${DEPLOY_DIR}"
+)
 
 # ============================================================
 # 测试

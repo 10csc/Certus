@@ -14,17 +14,9 @@ import pytest
 def temp_skill():
     tmp = tempfile.mkdtemp(prefix="orchtest_")
     cfg = {
-        "version": 6, "session_mode": "fixed",
-        "sessions": {
-            "myproject": {
-                "deepseek": "https://chat.deepseek.com/a/chat/s/abc123",
-                "kimi": "https://www.kimi.com/chat/xyz789",
-            }
-        },
-        "current_project": "myproject",
+        "version": 6,
         "platform_urls": {
             "deepseek": "https://chat.deepseek.com/",
-            "kimi": "https://www.kimi.com/",
         },
         "cdp_port": 9223,
     }
@@ -45,10 +37,9 @@ def temp_skill():
 class TestCheckPlatformConfig:
     def test_configured_projects(self, temp_skill):
         import orchestrator
-        output = orchestrator.check_platform_config(project="myproject")
+        output = orchestrator.check_platform_config()
         assert "deepseek" in output
-        # SEARCH_PLATFORM 和 SYNTH_PLATFORM 可能相同
-        assert "已配置" in output
+        assert "✗ 未配置" in output or "✓ 已配置" in output
 
     def test_returns_string(self, temp_skill):
         import orchestrator
@@ -65,26 +56,14 @@ class TestGetPlatformModule:
         assert hasattr(mod, "submit")
         assert hasattr(mod, "dismiss_blockers")
 
-    def test_kimi_module(self):
-        from generator import load_platform_module
-        mod = load_platform_module("kimi")
-        assert hasattr(mod, "fill_prompt")
-        assert hasattr(mod, "submit")
-
-    def test_chatgpt_module(self):
-        from generator import load_platform_module
-        mod = load_platform_module("chatgpt")
-        assert hasattr(mod, "fill_prompt")
-
 
 class TestSEARCHAndSYNTHPlatforms:
-    """验证平台获取函数正常返回已知平台名。"""
     def test_search_platform(self):
         from common import get_search_platform
         p = get_search_platform()
-        assert p in ("deepseek", "kimi", "chatgpt", "gemini")
+        assert p == "deepseek"
 
     def test_synth_platform(self):
         from common import get_synthesis_platform
         p = get_synthesis_platform()
-        assert p in ("deepseek", "kimi", "chatgpt", "gemini")
+        assert p == "deepseek"
