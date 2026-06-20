@@ -16,9 +16,11 @@
 ### 1. 安装 Python 依赖
 
 ```bash
-pip install playwright
+pip install playwright chromadb
 playwright install chromium
 ```
+
+> **语义缓存（可选）**：安装 `chromadb` 后，Certus 会将搜索结果存入 ChromaDB 语义缓存。之后搜索相似主题时直接命中缓存，大幅节省 API Token。不装也能正常使用，只是没有缓存加速。
 
 ### 2. 启动浏览器（CDP 模式）
 
