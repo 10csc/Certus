@@ -109,44 +109,45 @@ endif()
 # ============================================================
 
 set(DEPLOY_DIR "${CMAKE_SOURCE_DIR}")
-set(BUILD_BIN_DIR "$<TARGET_FILE_DIR:certus_gui>")
 
-# certus_gui 部署（用脚本模式确保容错）
+# Qt6 安装路径（优先使用 CMAKE_PREFIX_PATH 中的 Qt6 目录）
+if(CMAKE_PREFIX_PATH)
+    set(QT6_DIR "${CMAKE_PREFIX_PATH}")
+else()
+    # 回退：从 Qt6Core_DIR 推导
+    get_target_property(QT6_CORE_LOC Qt6::Core LOCATION)
+    cmake_path(GET QT6_CORE_LOC PARENT_PATH QT6_BIN_DIR)
+    cmake_path(GET QT6_BIN_DIR PARENT_PATH QT6_DIR)
+endif()
+
 add_custom_command(TARGET certus_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}/platforms"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${DEPLOY_DIR}/sqldrivers"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/certus_gui.exe"
+        "$<TARGET_FILE:certus_gui>"
         "${DEPLOY_DIR}/certus_gui.exe"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/Qt6Core.dll"       "${DEPLOY_DIR}/"
+        "${QT6_DIR}/bin/Qt6Core.dll"       "${DEPLOY_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/Qt6Gui.dll"        "${DEPLOY_DIR}/"
+        "${QT6_DIR}/bin/Qt6Gui.dll"        "${DEPLOY_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/Qt6Network.dll"    "${DEPLOY_DIR}/"
+        "${QT6_DIR}/bin/Qt6Network.dll"    "${DEPLOY_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/Qt6Sql.dll"        "${DEPLOY_DIR}/"
+        "${QT6_DIR}/bin/Qt6Sql.dll"        "${DEPLOY_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/Qt6Widgets.dll"    "${DEPLOY_DIR}/"
+        "${QT6_DIR}/bin/Qt6Widgets.dll"    "${DEPLOY_DIR}/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/msvcp140.dll"       "${DEPLOY_DIR}/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/vcruntime140.dll"   "${DEPLOY_DIR}/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/vcruntime140_1.dll" "${DEPLOY_DIR}/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/platforms/qwindows.dll"
+        "${QT6_DIR}/plugins/platforms/qwindows.dll"
         "${DEPLOY_DIR}/platforms/"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/sqldrivers/qsqlite.dll"
+        "${QT6_DIR}/plugins/sqldrivers/qsqlite.dll"
         "${DEPLOY_DIR}/sqldrivers/"
     COMMENT "部署 certus_gui → ${DEPLOY_DIR}"
 )
 
-# certus_backend 部署
 add_custom_command(TARGET certus_backend POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILD_BIN_DIR}/certus_backend.exe"
+        "$<TARGET_FILE:certus_backend>"
         "${DEPLOY_DIR}/certus_backend.exe"
     COMMENT "部署 certus_backend → ${DEPLOY_DIR}"
 )
