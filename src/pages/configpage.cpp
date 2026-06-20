@@ -145,11 +145,11 @@ void ConfigPage::setupUi()
     form->addRow("", m_autoLaunchBrowser);
 
     // 环境自举
-    auto *envBtn = new QPushButton("自动检测环境", this);
+    auto *envBtn = new QPushButton("环境检测与修复", this);
     connect(envBtn, &QPushButton::clicked, this, &ConfigPage::onDetectEnvironment);
-    form->addRow("环境自举:", envBtn);
+    form->addRow("一键自举:", envBtn);
 
-    m_envStatus = new QLabel("点击「自动检测环境」检查系统就绪状态", this);
+    m_envStatus = new QLabel("点击「环境检测与修复」一键检查并自动修复环境问题", this);
     m_envStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::TextMuted));
     m_envStatus->setWordWrap(true);
     form->addRow("", m_envStatus);
@@ -272,16 +272,21 @@ void ConfigPage::onDetectEnvironment()
 {
     if (!m_db) return;
 
-    m_envStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Info));
-    m_envStatus->setText("● 检测中...");
+    auto setStatus = [this](const QString &msg) {
+        m_envStatus->setStyleSheet(QString("color:%1; font-size:11px; padding:4px 0;").arg(Theme::Info));
+        m_envStatus->setText(msg);
+        QCoreApplication::processEvents();
+    };
 
-    QCoreApplication::processEvents();
+    setStatus("● 检测中...");
 
     QStringList okLines;
     QStringList warnLines;
     QStringList errLines;
 
+    // ============================================================
     // 1. 检测 Python
+    // ============================================================
     QStringList pythonCandidates = {
         "D:/python_all/Python312/python.exe",
         "C:/Python312/python.exe",
@@ -300,20 +305,56 @@ void ConfigPage::onDetectEnvironment()
             break;
         }
     }
-    if (pythonPath.isEmpty())
+    if (pythonPath.isEmpty()) {
         errLines.append("✗ Python: 未找到 (请安装 Python 3.12+)");
-
-    // 2. 检测 Playwright
-    if (!pythonPath.isEmpty()) {
-        QProcess pwProc;
-        pwProc.start(pythonPath, {"-c", "import playwright; print(playwright.__file__)"});
-        if (pwProc.waitForFinished(5000) && pwProc.exitCode() == 0)
-            okLines.append("✓ Playwright: 已安装");
-        else
-            warnLines.append("△ Playwright: 未安装 (运行 pip install playwright 后重试)");
     }
 
+    // ============================================================
+    // 2. 检测 Playwright → 缺失则自动安装
+    // ============================================================
+    if (!pythonPath.isEmpty()) {
+        bool hasPlaywright = false;
+        {
+            QProcess pwProc;
+            pwProc.start(pythonPath, {"-c", "import playwright; print(playwright.__file__)"});
+            hasPlaywright = pwProc.waitForFinished(5000) && pwProc.exitCode() == 0;
+        }
+
+        if (hasPlaywright) {
+            okLines.append("✓ Playwright: 已安装");
+        } else {
+            warnLines.append("△ Playwright: 未安装 → 正在自动安装...");
+            setStatus(QString("● 正在安装 Playwright...\n%1").arg(
+                okLines.join("\n") + "\n" + warnLines.join("\n")));
+
+            // pip install playwright
+            {
+                QProcess pip;
+                pip.start(pythonPath, {"-m", "pip", "install", "playwright"});
+                if (pip.waitForFinished(60000) && pip.exitCode() == 0) {
+                    warnLines.last() = "△ Playwright: pip 安装完成 → 安装浏览器...";
+                    setStatus(QString("● 正在安装 Playwright 浏览器...\n%1").arg(
+                        okLines.join("\n") + "\n" + warnLines.join("\n")));
+
+                    // playwright install chromium
+                    QProcess install;
+                    install.start(pythonPath, {"-m", "playwright", "install", "chromium"});
+                    if (install.waitForFinished(120000) && install.exitCode() == 0) {
+                        warnLines.removeLast();
+                        okLines.append("✓ Playwright: 已自动安装完成");
+                    } else {
+                        warnLines.last() = "△ Playwright: 浏览器安装失败 (请手动运行 playwright install chromium)";
+                    }
+                } else {
+                    warnLines.last() = "△ Playwright: pip 安装失败 (请手动运行 pip install playwright)";
+                }
+            }
+        }
+    }
+
+    // ============================================================
     // 3. 检测浏览器
+    // ============================================================
     QString browserPath = BrowserManager::findBrowserPath(BrowserManager::Edge);
     if (browserPath.isEmpty())
         browserPath = BrowserManager::findBrowserPath(BrowserManager::Chrome);
@@ -322,18 +363,36 @@ void ConfigPage::onDetectEnvironment()
     else
         warnLines.append("△ 浏览器: 未找到 Edge/Chrome");
 
-    // 4. 扫描 CDP 端口
+    // ============================================================
+    // 4. 扫描 CDP 端口 → 无响应则自动启动
+    // ============================================================
     if (m_browser) {
         int port = m_browser->scanCdpPort(9223, 9226);
         if (port > 0) {
             okLines.append(QString("✓ CDP 端口: %1").arg(port));
             m_cdpPort->setText(QString::number(port));
+        } else if (!browserPath.isEmpty()) {
+            warnLines.append(QString("△ CDP: 端口无响应 → 正在自动启动浏览器...").arg(9223));
+            setStatus(QString("● 正在启动浏览器...\n%1").arg(
+                okLines.join("\n") + "\n" + warnLines.join("\n")));
+
+            m_cdpPort->setText("9223");
+            m_db->saveConfig("cdp_port", "9223");
+            int result = m_browser->launch(9223);
+            if (result > 0) {
+                warnLines.removeLast();
+                okLines.append(QString("✓ 浏览器: 已自动启动 (CDP 端口 %1)").arg(result));
+            } else {
+                warnLines.last() = QString("△ CDP: 浏览器启动失败 (请手动启动并指定 --remote-debugging-port=%1)").arg(9223);
+            }
         } else {
-            warnLines.append(QString("△ CDP: 端口 %1 无响应 (请启动浏览器)").arg(9223));
+            warnLines.append(QString("△ CDP: 端口 %1 无响应 (未找到浏览器)").arg(9223));
         }
     }
 
+    // ============================================================
     // 5. 检查 API Key
+    // ============================================================
     QString encryptedKey = m_db->loadConfig("deepseek_key", "");
     if (!encryptedKey.isEmpty()) {
         QString decrypted = Crypto::decrypt(encryptedKey);
@@ -345,14 +404,18 @@ void ConfigPage::onDetectEnvironment()
         warnLines.append("△ DeepSeek API Key: 未配置 (本地总结功能受限)");
     }
 
+    // ============================================================
     // 6. 平台 URL 完整性
+    // ============================================================
     QJsonObject urls = m_configJson["platform_urls"].toObject();
     if (urls.isEmpty())
         warnLines.append("△ 平台 URL: 未注册任何平台");
     else
         okLines.append(QString("✓ 平台 URL: 已注册 %1 个平台").arg(urls.size()));
 
+    // ============================================================
     // 汇总显示
+    // ============================================================
     QStringList allLines;
     allLines << okLines << warnLines << errLines;
     QString html = allLines.join("<br>");
@@ -365,11 +428,11 @@ void ConfigPage::onDetectEnvironment()
         ? QString("<span style='color:%1;'>● 环境就绪</span>").arg(Theme::Green)
         : (errLines.isEmpty()
            ? QString("<span style='color:%1;'>● 环境基本可用 (部分警告)</span>").arg(Theme::Warning)
-           : QString("<span style='color:%1;'>● 环境不可用 (需修复错误)</span>").arg(Theme::Error));
+           : QString("<span style='color:%1;'>● 环境不可用 (需手动修复)</span>").arg(Theme::Error));
     m_envStatus->setText(overall + "<br>" + html);
 
-    Toast::show(allOk ? "环境检测通过" : "环境检测完成 (有问题)",
-                allOk ? Toast::Success : Toast::Warning, this);
+    Toast::show(allOk ? "环境就绪" : (errLines.isEmpty() ? "环境基本可用 (有警告)" : "环境存在问题"),
+                allOk ? Toast::Success : (errLines.isEmpty() ? Toast::Warning : Toast::Error), this);
 }
 
 // ============================================================
