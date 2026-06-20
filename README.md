@@ -71,6 +71,12 @@ certus_gui.exe (Qt C++ 前端)
     └── UI Pages       → 配置 / 搜索 / 平台 / 记忆
 ```
 
+## AI Agent 接入
+
+Certus 后端提供 CLI 接口，供外部 AI Agent（Claude Code、Cursor、Codex 等）直接调用执行深度搜索。详见 [CLI_AGENT.md](./CLI_AGENT.md)。
+
+快速接入：让 Agent 阅读 `CLI_AGENT.md` 后，即可通过 `certus_backend search --json` 获得结构化搜索结果。
+
 ## 许可
 
 MIT License
