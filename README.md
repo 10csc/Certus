@@ -13,32 +13,42 @@
 
 ## 快速开始
 
-### 1. 安装 Python 依赖
+### 1. 启动
+
+双击 `certus_gui.exe`。
+
+### 2. 一键自举
+
+配置页 → 填 DeepSeek API Key → 点「环境检测与修复」，程序自动：
+- 发现 Python 路径
+- 安装 Playwright + Chromium（如未装）
+- 启动浏览器 CDP 端口
+- 检测 API Key 状态
+
+### 3. 搜索
+
+环境就绪后切到搜索页，输入问题即可。
+
+---
+
+### 备选：手动配置
+
+如果自动检测失败，可手动安装依赖：
 
 ```bash
-pip install playwright chromadb
+# Playwright（必需）
+pip install playwright
 playwright install chromium
+
+# ChromaDB 语义缓存（可选，装了省 Token）
+pip install chromadb
 ```
 
-> **语义缓存（可选）**：安装 `chromadb` 后，Certus 会将搜索结果存入 ChromaDB 语义缓存。之后搜索相似主题时直接命中缓存，大幅节省 API Token。不装也能正常使用，只是没有缓存加速。
-
-### 2. 启动浏览器（CDP 模式）
+手动启动浏览器 CDP：
 
 ```bash
-# Edge
 "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9223
-
-# Chrome
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9223
 ```
-
-### 3. 启动 Certus
-
-```bash
-certus_gui.exe
-```
-
-在配置页设置 DeepSeek API Key，运行环境检测确认所有依赖就绪，即可开始搜索。
 
 ## 构建
 
